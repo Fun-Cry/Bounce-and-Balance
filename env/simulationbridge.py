@@ -55,7 +55,6 @@ class Sim:
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
         p.resetSimulation()
         self.plane = p.loadURDF("plane.urdf")
-        create_staircase()
         robotStartOrientation = p.getQuaternionFromEuler([0, 0, 0])
 
         self.path_parent = os.getcwd()

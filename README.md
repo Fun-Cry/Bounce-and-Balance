@@ -1,7 +1,9 @@
 # robotics_final
 
-rex_bot is the pybullet version of the code
+```
+python -m test.debug_sim
+```
 TODO: 
-1. create interface for coppeliasim
-2. add camera to the robot in .ttt file
+1. add camera to the robot in .ttt file
+2. dynamically change rooms
 3. start training
