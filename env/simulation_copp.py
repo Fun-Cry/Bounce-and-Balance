@@ -4,40 +4,47 @@ from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 # Minimal additional imports to mimic the PyBullet control method.
 from env import actuator
 from env import actuator_param
-# from env import spring
+# 'spring' should be provided as an instance with a method fn_spring
 
 class CoppeliaSimZMQInterface:
     def __init__(self, spring, joint_aliases=None, dt=1e-3, q_cal=None):
         """
-        Initialize connection, get joint handles, and start simulation.
-        :param joint_aliases: List of aliases/paths for joints (e.g. ['/Joint_0', '/Joint_1', ...]).
-        :param dt: Timestep.
-        :param q_cal: Calibration values for primary joints (for example, for /Joint_0 and /Joint_1).
+        Initialize connection, retrieve joint handles, and start the simulation.
+        
+        Note: The dummy objects and their link constraint between Link 1 and Link 3
+        must be set manually in the scene (using the GUI).
+        
+        :param spring: An instance with a method fn_spring for spring compensation.
+        :param joint_aliases: List of joint alias strings (e.g., ['/Joint_0', '/Joint_1', ...]).
+        :param dt: Time step for simulation.
+        :param q_cal: Calibration values for the primary joints.
         """
         if q_cal is None:
             q_cal = np.zeros(2)
         self.dt = dt
         self.q_cal = np.array(q_cal)
         
-        # Create the ZMQ remote client and get the simulation object.
+        # Create the remote client and retrieve the simulation object.
         self.client = RemoteAPIClient()  # Uses default connection settings.
         self.sim = self.client.getObject('sim')
+        
+        # For testing, we set gravity to [0, 0, 0]. (Change if needed.)
+        self.sim.setArrayParam(self.sim.arrayparam_gravity, [0, 0, -1])
         
         # Enable synchronous stepping if supported.
         if hasattr(self.sim, "setStepping"):
             self.sim.setStepping(True)
         
-        # Use default aliases if none are provided.
+        # Use default joint aliases if none provided.
         if joint_aliases is None:
             joint_aliases = ["/Joint_0", "/Joint_1", "/Joint_2", "/Joint_3",
                              "/joint_rw0", "/joint_rw1", "/joint_rwz"]
         self.joint_aliases = joint_aliases
         self.joint_handles = {}
         
-        # Retrieve handles using the new alias notation.
+        # Retrieve joint handles using the provided aliases.
         for alias in self.joint_aliases:
             try:
-                # The new recommended method is to use sim.getObject().
                 handle = self.sim.getObject(alias)
                 self.joint_handles[alias] = handle
                 print(f"Retrieved handle for {alias}")
@@ -46,8 +53,8 @@ class CoppeliaSimZMQInterface:
         
         # Start the simulation.
         self.sim.startSimulation()
-
-        # --- New additions to mimic the PyBullet control dynamics ---
+        
+        # Set up actuator dynamics to mimic PyBullet.
         self.spring_fn = spring.fn_spring
         self.actuator_q0 = actuator.Actuator(dt=self.dt, model=actuator_param.actuator_rmdx10)
         self.actuator_q2 = actuator.Actuator(dt=self.dt, model=actuator_param.actuator_rmdx10)
@@ -56,12 +63,15 @@ class CoppeliaSimZMQInterface:
         self.actuator_rwz = actuator.Actuator(dt=self.dt, model=actuator_param.actuator_8318)
         self.spring_fn = spring.fn_spring
 
+        # Note: The dummy-dummy constraint between Link 1 and Link 3 is assumed to be set manually in the scene.
+    
     def _get_joint_states(self):
         """
-        Retrieve the positions and velocities for all joints.
+        Retrieve joint positions and velocities.
+        
         Returns:
-            positions: dict {alias: position}
-            velocities: dict {alias: velocity}
+            positions: A dictionary mapping joint alias to its position.
+            velocities: A dictionary mapping joint alias to its velocity.
         """
         positions = {}
         velocities = {}
@@ -71,7 +81,6 @@ class CoppeliaSimZMQInterface:
                 positions[alias] = pos
             except Exception as e:
                 print(f"Error reading position for {alias}: {e}")
-            
             try:
                 vel = self.sim.getJointVelocity(handle)
                 velocities[alias] = vel
@@ -82,44 +91,42 @@ class CoppeliaSimZMQInterface:
 
     def control(self, u):
         """
-        Accept a control vector u (with 5 elements) and send commands to the simulation.
-        The mapping follows the PyBullet control logic:
-          - /Joint_0 and /Joint_1 are primary joints (with actuator dynamics and spring compensation),
-          - /joint_rw0, /joint_rw1, /joint_rwz map to the reaction wheels.
-        :param u: numpy array with 5 control inputs.
+        Accept a control vector u (with 5 elements) and send torque commands to the simulation.
+        The method mimics torque control by setting a high target velocity and using
+        setJointTargetForce to limit the applied force.
+        
+        :param u: numpy array of 5 control inputs.
         """
         # Invert control input to match sign conventions.
         u = -u
 
         positions, velocities = self._get_joint_states()
         
-        # Ensure that primary joints are available.
+        # Check for primary joint states.
         if "/Joint_0" not in positions or "/Joint_1" not in positions:
-            print("Error: Expected primary joints not found. Check the joint aliases in your scene.")
+            print("Error: Expected primary joints not found. Check joint aliases.")
             return
         
-        # Retrieve and calibrate primary joint positions.
+        # Calibrate and retrieve primary joint positions.
         q0 = positions["/Joint_0"] + self.q_cal[0]
         q2 = positions["/Joint_1"] + self.q_cal[1]
         dq_q0 = velocities.get("/Joint_0", 0.0)
         dq_q2 = velocities.get("/Joint_1", 0.0)
         
-        # Compute spring torques for the primary joints.
+        # Compute spring torques.
         tau_s = self.spring_fn(q0=q0, q2=q2)
         
         # Compute actuator outputs.
         tau = np.zeros(5)
-        # For primary joints
         tau0, _, _ = self.actuator_q0.actuate(i=u[0], q_dot=dq_q0)
         tau2, _, _ = self.actuator_q2.actuate(i=u[1], q_dot=dq_q2)
         tau[0] = tau0 + tau_s[0]
         tau[1] = tau2 + tau_s[1]
-        # For reaction wheels
         tau[2], _, _ = self.actuator_rw1.actuate(i=u[2], q_dot=velocities.get("/joint_rw0", 0.0))
         tau[3], _, _ = self.actuator_rw2.actuate(i=u[3], q_dot=velocities.get("/joint_rw1", 0.0))
         tau[4], _, _ = self.actuator_rwz.actuate(i=u[4], q_dot=velocities.get("/joint_rwz", 0.0))
         
-        # Map the computed torques to the appropriate joints.
+        # Map computed torques to the corresponding joints.
         command_mapping = {
             "/Joint_0": tau[0],
             "/Joint_1": tau[1],
@@ -128,21 +135,28 @@ class CoppeliaSimZMQInterface:
             "/joint_rwz": tau[4]
         }
         
-        for alias, command in command_mapping.items():
+        # Apply torque control by setting a high target velocity (to "drive" the joint)
+        # and limiting the force via setJointTargetForce.
+        for alias, torque_command in command_mapping.items():
             if alias in self.joint_handles:
                 try:
-                    self.sim.setJointTargetVelocity(self.joint_handles[alias], command)
+                    target_velocity = 0.0
+                    if abs(torque_command) > 1e-6:
+                        target_velocity = 1e3 if torque_command > 0 else -1e3
+                    self.sim.setJointTargetVelocity(self.joint_handles[alias], target_velocity)
+                    self.sim.setJointTargetForce(self.joint_handles[alias], abs(torque_command))
+                    print(f"Set joint {alias}: target velocity = {target_velocity}, force = {abs(torque_command)}")
                 except Exception as e:
                     print(f"Error sending command to {alias}: {e}")
             else:
                 print(f"Warning: handle for {alias} not found.")
         
-        # Step the simulation since we are in synchronous mode.
+        # Step the simulation (since we're in synchronous mode).
         self.sim.step()
 
     def close(self):
         """
-        Stop the simulation and disconnect.
+        Stop the simulation and disconnect the remote client.
         """
         try:
             self.sim.stopSimulation()
@@ -150,3 +164,25 @@ class CoppeliaSimZMQInterface:
             print(f"Error stopping simulation: {e}")
         self.client.disconnect()
         print("Simulation closed.")
+
+# Example usage:
+if __name__ == "__main__":
+    # Create a dummy spring model with a simple linear spring compensation.
+    class DummySpring:
+        def fn_spring(self, q0, q2):
+            k = 0.5
+            return [k * q0, k * q2]
+    
+    spring_instance = DummySpring()
+    simInterface = CoppeliaSimZMQInterface(spring=spring_instance)
+    
+    import time
+    try:
+        for _ in range(1000):
+            u = np.array([0.1, 0.1, 0.05, 0.05, 0.02])
+            simInterface.control(u)
+            time.sleep(simInterface.dt)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        simInterface.close()

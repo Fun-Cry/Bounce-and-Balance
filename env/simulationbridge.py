@@ -12,7 +12,7 @@ from env import actuator
 from env import actuator_param
 from env.utils import L, Z, Q_inv
 from env.scenes import create_staircase
-useRealTime = 0  # Do NOT change to real time
+useRealTime = 1  # Do NOT change to real time
 
 
 def reaction(numJoints, bot):  # returns joint reaction force
@@ -74,6 +74,8 @@ class Sim:
         # p.createConstraint(self.bot, 3, -1, -1, p.JOINT_POINT2POINT, [0, 0, 0], [-0.135, 0, 0], [0, 0, 0])
         jconn_1 = [x * scale for x in [0.135, 0, 0]]
         jconn_2 = [x * scale for x in [-0.0014381, 0, 0.01485326948]]
+        
+        print(jconn_1, jconn_2)
         linkjoint = p.createConstraint(self.bot, 1, self.bot, 3, p.JOINT_POINT2POINT, [0, 0, 0], jconn_1, jconn_2)
         p.changeConstraint(linkjoint, maxForce=1000)
         self.c_link = 3
@@ -105,7 +107,7 @@ class Sim:
         robot_id = self.bot  # Use your existing robot id
 
         num_joints = p.getNumJoints(robot_id)
-        print("Number of joints:", num_joints)
+        # print("Number of joints:", num_joints)
 
         joint_index_mapping = {}  # dictionary to hold name:index mapping
 
@@ -113,7 +115,7 @@ class Sim:
             joint_info = p.getJointInfo(robot_id, i)
             joint_name = joint_info[1].decode('UTF-8')
             joint_index_mapping[joint_name] = i
-            print(f"Index: {i}, Joint Name: {joint_name}")
+            # print(f"Index: {i}, Joint Name: {joint_name}")
 
         # Now you know which index corresponds to which joint (e.g., joint_0, joint_rw0, etc.)
 
@@ -208,4 +210,32 @@ class Sim:
         if useRealTime == 0:
             p.stepSimulation()
 
-        return self.X, qa, dqa, c, tau, i, v, grf
+        return self.X, qa, dqa, c, tau, i, v, 
+    
+    def get_camera_image(self, link_index=0, width=128, height=128, fov=90, near=0.01, far=5.0):
+        """
+        Renders an RGB image from the perspective of the given link (default = base link).
+        """
+        # Get the pose of the link in the world frame
+        pos, orn = p.getLinkState(self.bot, link_index)[:2]
+
+        # Get view and projection matrices
+        rot_matrix = p.getMatrixFromQuaternion(orn)
+        forward_vec = np.array([rot_matrix[0], rot_matrix[3], rot_matrix[6]])
+        up_vec = np.array([rot_matrix[2], rot_matrix[5], rot_matrix[8]])
+        cam_target = np.array(pos) + 0.5 * forward_vec
+
+        view_matrix = p.computeViewMatrix(cameraEyePosition=pos,
+                                        cameraTargetPosition=cam_target,
+                                        cameraUpVector=up_vec)
+
+        aspect = width / height
+        proj_matrix = p.computeProjectionMatrixFOV(fov=fov,
+                                                aspect=aspect,
+                                                nearVal=near,
+                                                farVal=far)
+
+        # Get camera image
+        img = p.getCameraImage(width, height, viewMatrix=view_matrix, projectionMatrix=proj_matrix)
+        rgb_array = np.reshape(img[2], (height, width, 4))[:, :, :3]  # strip alpha
+        return rgb_array
