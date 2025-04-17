@@ -1,10 +1,12 @@
 import numpy as np
 from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 
+import cv2
 # Minimal additional imports to mimic the PyBullet control method.
 from env import actuator
 from env import actuator_param
 # 'spring' should be provided as an instance with a method fn_spring
+import struct
 
 class CoppeliaSimZMQInterface:
     def __init__(self, spring, joint_aliases=None, dt=1e-3, q_cal=None):
@@ -27,6 +29,30 @@ class CoppeliaSimZMQInterface:
         # Create the remote client and retrieve the simulation object.
         self.client = RemoteAPIClient()  # Uses default connection settings.
         self.sim = self.client.getObject('sim')
+        # self.vision_sensor_handle = self.sim.getObject("/base_link_respondable/visionSensor")
+        try:
+            self.vision_sensor_handle = self.sim.getObject("/base_link_respondable/visionSensor")
+            print("✅ Vision sensor found.")
+        except Exception:
+            self.vision_sensor_handle = None
+            print("⚠️ Vision sensor not found.")
+
+        # Try to get LiDAR
+        try:
+            self.lidar_handle = self.sim.getObject("/base_link_respondable/VelodyneVPL16")
+            self.lidar_script = self.sim.getScript(
+                self.sim.scripttype_childscript,
+                self.lidar_handle
+            )
+            # print("✅ LiDAR child‑script handle:", self.lidar_script)
+            print("✅ LiDAR found.")
+        except Exception:
+            self.lidar_handle = None
+            print("⚠️ LiDAR not found.")
+            
+                
+    # sim.scripttype_childscript is the right type
+    
         
         # For testing, we set gravity to [0, 0, 0]. (Change if needed.)
         self.sim.setArrayParam(self.sim.arrayparam_gravity, [0, 0, -1])
@@ -164,6 +190,62 @@ class CoppeliaSimZMQInterface:
             print(f"Error stopping simulation: {e}")
         self.client.disconnect()
         print("Simulation closed.")
+        
+    def get_sensor_data(self, show=False):
+        """
+        Returns (rgb, depth, lidar):
+        - rgb: H×W×3 uint8 image or None
+        - depth: H×W float32 normalized [0,1] or None
+        - lidar: N×3 float32 point cloud or None
+        """
+        rgb, depth, lidar = None, None, None
+
+        # --- camera (unchanged) ---
+        if self.vision_sensor_handle is not None:
+            try:
+                res_x, res_y = self.sim.getVisionSensorResolution(self.vision_sensor_handle)
+                img_buf, _, _ = self.sim.getVisionSensorCharImage(self.vision_sensor_handle)
+                rgb = np.frombuffer(img_buf, dtype=np.uint8).reshape((res_y, res_x, 3))
+                rgb = np.flipud(rgb)
+
+                depth_buf = self.sim.getVisionSensorDepthBuffer(self.vision_sensor_handle)
+                depth = np.array(depth_buf, dtype=np.float32).reshape((res_y, res_x))
+                depth = np.flipud(depth)
+                depth = (depth - depth.min()) / (depth.max() - depth.min() + 1e-8)
+
+                if show:
+                    cv2.imshow("RGB", rgb)
+                    cv2.imshow("Depth", (depth * 255).astype(np.uint8))
+                    cv2.waitKey(1)
+            except Exception as e:
+                print(f"[Camera] Error reading: {e}")
+
+        # --- LiDAR (new) ---
+        # In your get_sensor_data method, modify the LiDAR section:
+        if self.lidar_handle is not None:
+            try:
+                # The correct format is "functionName@objectPath"
+                res = self.sim.callScriptFunction(
+                    'getVelodyneBuffer@/base_link_respondable/VelodyneVPL16',
+                    self.sim.scripttype_childscript,
+                    # -1,  # Use -1 to indicate the function is called by name
+                    # [], [], [], b''
+                )
+                
+                packed = res[3]  # The packed buffer is in the fourth return value
+                if packed:
+                    count = len(packed) // 4
+                    flat = struct.unpack('<' + 'f'*count, packed)
+                    pts4 = np.array(flat, dtype=np.float32).reshape(-1, 4)
+                    lidar = pts4[:, :3]
+                    if show:
+                        print(f"[LiDAR] Retrieved {lidar.shape[0]} points")
+            except Exception as e:
+                print(f"[LiDAR] Error reading: {e}")
+
+        return rgb, depth, lidar
+
+
 
 # Example usage:
 if __name__ == "__main__":
