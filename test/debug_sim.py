@@ -20,7 +20,6 @@ if __name__ == "__main__":
 
             # Unified sensor reading
             rgb, depth, lidar = simInterface.get_sensor_data(show=True)
-            print(lidar )
 
             if depth is not None:
                 print(f"Depth shape: {depth.shape}")
