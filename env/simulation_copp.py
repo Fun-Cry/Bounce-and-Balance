@@ -50,7 +50,7 @@ class CoppeliaSimZMQInterface:
             print('⚠️ LiDAR or child script not found.')
 
         # Zero gravity and synchronous stepping
-        self.sim.setArrayParam(self.sim.arrayparam_gravity, [0, 0, -1])
+        self.sim.setArrayParam(self.sim.arrayparam_gravity, [0, 0, -9,81])
         if hasattr(self.sim, 'setStepping'):
             self.sim.setStepping(True)
 

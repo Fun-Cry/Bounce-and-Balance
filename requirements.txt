@@ -2,3 +2,4 @@ coppeliasim-zmqremoteapi-client
 numpy
 opencv-python
 keyboard
+gymnasium
