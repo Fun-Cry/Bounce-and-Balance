@@ -4,6 +4,5 @@
 python -m test.debug_sim
 ```
 TODO: 
-1. add camera to the robot in .ttt file
-2. dynamically change rooms
+1. better design for terrain generation
 3. start training
