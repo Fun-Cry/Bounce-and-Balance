@@ -4,6 +4,8 @@ import struct
 import cv2
 from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 from env import actuator, actuator_param
+from env.scene_elements import generate_random_mountain # MODIFIED: Import for mountains
+import random
 
 class CoppeliaSimZMQInterface:
     def __init__(self, spring, joint_aliases=None, dt=1e-3, q_cal=None, exclusion_radius=0.5):
@@ -15,7 +17,7 @@ class CoppeliaSimZMQInterface:
             q_cal = np.zeros(2)
         self.dt = dt
         self.q_cal = np.array(q_cal)
-        self.exclusion_radius = exclusion_radius
+        self.exclusion_radius = exclusion_radius # Note: Not actively used by mountain generation's placement
 
         # Remote API client
         self.client = RemoteAPIClient()
@@ -30,7 +32,7 @@ class CoppeliaSimZMQInterface:
             self.robot_base = None
             self.initial_base_pos = [0,0,0]
             self.initial_base_ori = [0,0,0]
-            print('⚠️ Could not get base_link_respondable. Towers will not avoid robot.')
+            print('⚠️ Could not get base_link_respondable. Mountain placement will not actively avoid robot start.')
 
         # Vision sensor handle
         try:
@@ -50,7 +52,7 @@ class CoppeliaSimZMQInterface:
             print('⚠️ LiDAR or child script not found.')
 
         # Zero gravity and synchronous stepping
-        self.sim.setArrayParam(self.sim.arrayparam_gravity, [0, 0, -9,81])
+        self.sim.setArrayParam(self.sim.arrayparam_gravity, [0, 0, -9.81])
         if hasattr(self.sim, 'setStepping'):
             self.sim.setStepping(True)
 
@@ -74,8 +76,8 @@ class CoppeliaSimZMQInterface:
         self.actuator_rw2= actuator.Actuator(dt=self.dt, model=actuator_param.actuator_r100kv90)
         self.actuator_rwz= actuator.Actuator(dt=self.dt, model=actuator_param.actuator_8318)
 
-        # Container for towers
-        self.tower_handles = []
+        # Container for scenery handles (was tower_handles)
+        self.scenery_handles = [] # Renamed for clarity, was tower_handles
 
     def _get_joint_states(self):
         pos, vel = {}, {}
@@ -108,19 +110,20 @@ class CoppeliaSimZMQInterface:
         taus[4],_,_ = self.actuator_rwz.actuate(i=u[4], q_dot=vel.get('/joint_rwz',0.0))
         taus[0] += ts0; taus[1] += ts1
 
+        # ... (previous lines in control method) ...
         mapping = {'/Joint_0':taus[0],'/Joint_1':taus[1],
                    '/joint_rw0':taus[2],'/joint_rw1':taus[3],'/joint_rwz':taus[4]}
-        for alias, torque in mapping.items():
+        for alias, torque in mapping.items(): # 'torque' is the variable from the loop
             h = self.joint_handles.get(alias)
             if not h: continue
-            vcmd = 1000.0 if torque>0 else (-1000.0 if torque<0 else 0.0)
+            vcmd = 1000.0 if torque > 0 else (-1000.0 if torque < 0 else 0.0)
             self.sim.setJointTargetVelocity(h, vcmd)
-            self.sim.setJointTargetForce(h, abs(torque))
+            # MODIFIED LINE:
+            self.sim.setJointTargetForce(h, float(abs(torque)))
         self.sim.step()
 
     def get_sensor_data(self, show=False):
         rgb, lidar = None, None
-        # RGB only
         if self.vision_sensor_handle:
             try:
                 rx, ry = self.sim.getVisionSensorResolution(self.vision_sensor_handle)
@@ -131,7 +134,6 @@ class CoppeliaSimZMQInterface:
                     cv2.waitKey(1)
             except:
                 pass
-        # LiDAR
         if self.lidar_handle and self.lidar_script:
             _,_,_,buf = self.sim.callScriptFunction(
                 'getVelodyneBuffer',self.lidar_script,[],[],[],None)
@@ -143,87 +145,120 @@ class CoppeliaSimZMQInterface:
                     print(f'[LiDAR] {lidar.shape[0]} pts')
         return rgb, lidar
 
-    def clear_towers(self):
-        for h in self.tower_handles:
+    def clear_scenery(self): # Renamed for clarity, was clear_towers
+        for h in self.scenery_handles:
             try: self.sim.removeObject(h)
             except: pass
-        self.tower_handles = []
+        self.scenery_handles = []
 
-    def spawn_towers(self,
-                     n_towers=5,
-                     area_radius=2.0,
-                     radius_range=(0.2,0.5),
-                     height_range=(0.1,0.4),
-                     shape_options=0):
-        """Spawn towers avoiding robot base zone and enable collision."""
-        self.clear_towers()
-        bx, by = self.initial_base_pos[0], self.initial_base_pos[1]
-        for _ in range(n_towers):
-            # sample until outside exclusion radius
-            for _ in range(20):
-                r = np.sqrt(np.random.rand()) * area_radius
-                theta = np.random.rand()*2*np.pi
-                x, y = bx + r*np.cos(theta), by + r*np.sin(theta)
-                if np.hypot(x-bx, y-by) >= self.exclusion_radius:
-                    break
-            br = float(np.random.uniform(*radius_range))
-            h = float(np.random.uniform(*height_range))
-            cyl = self.sim.createPrimitiveShape(
-                self.sim.primitiveshape_cylinder,[2*br,2*br,h],shape_options)
-            self.sim.setObjectPosition(cyl, -1, [x, y, h/2])
-            self.sim.setObjectOrientation(cyl, -1, [0,0,0])
-            # enable static and respondable
-            self.sim.setObjectInt32Param(cyl, self.sim.shapeintparam_static, 1)
-            self.sim.setObjectInt32Param(cyl, self.sim.shapeintparam_respondable, 1)
-            self.tower_handles.append(cyl)
+    # MODIFIED: spawn_towers is now spawn_scenery and generates mountains
+    def spawn_scenery(self,
+                     n_items=3,
+                     shape_options=8,
+                     mountain_target_total_height=1.0,
+                     mountain_max_cylinder_height=0.4,
+                     mountain_min_cylinder_height=0.05,
+                     mountain_peak_radius=0.1,
+                     # MODIFIED: Expect a range for base_radius_factor
+                     mountain_base_radius_factor_range=(4.0, 7.0), # Example default range
+                     mountain_area_bounds_x=None,
+                     mountain_area_bounds_y=None,
+                     **kwargs
+                    ):
+        """Spawns mountains using generate_random_mountain with customizable and randomized properties."""
+        self.clear_scenery()
+
+        for _ in range(n_items):
+            # MODIFIED: Generate a random base_radius_factor for each mountain
+            current_base_radius_factor = random.uniform(
+                mountain_base_radius_factor_range[0],
+                mountain_base_radius_factor_range[1]
+            )
+
+            # Prepare arguments for generate_random_mountain
+            gen_args = {
+                'sim': self.sim,
+                'target_total_height': mountain_target_total_height,
+                'max_cylinder_height': mountain_max_cylinder_height,
+                'min_cylinder_height': mountain_min_cylinder_height,
+                'peak_radius': mountain_peak_radius,
+                'base_radius_factor': current_base_radius_factor, # Use the randomized factor
+                'shape_options': shape_options
+            }
+            if mountain_area_bounds_x is not None:
+                gen_args['area_bounds_x'] = mountain_area_bounds_x
+            if mountain_area_bounds_y is not None:
+                gen_args['area_bounds_y'] = mountain_area_bounds_y
+            
+            mountain_handles = generate_random_mountain(**gen_args)
+            if mountain_handles:
+                self.scenery_handles.extend(mountain_handles)
 
     def reset_environment(self, sequential=False, **kwargs):
-        """Spawn towers and reset robot to initial pose."""
-        # reset robot
+        """Spawn scenery (now mountains) and reset robot to initial pose."""
         if self.robot_base:
             self.sim.setObjectPosition(self.robot_base, -1, self.initial_base_pos)
             self.sim.setObjectOrientation(self.robot_base, -1, self.initial_base_ori)
-        # spawn towers
+        
         if sequential:
-            # sequential mode (unchanged)
-            pass  # existing sequential implementation
+            # sequential mode (unchanged logic if any)
+            pass
         else:
-            self.spawn_towers(**kwargs)
+            # MODIFIED: Call spawn_scenery instead of spawn_towers
+            self.spawn_scenery(**kwargs)
 
     def close(self):
-        try: 
-            self.clear_towers()
+        try:
+            self.clear_scenery()
             self.sim.stopSimulation()
         except: pass
         cv2.destroyAllWindows()
-        # self.client.disconnect()
         print('Simulation closed.')
 
 if __name__ == '__main__':
     class DummySpring:
         def fn_spring(self,q0,q2): return 0.5*q0,0.5*q2
+
     sim_iface = CoppeliaSimZMQInterface(spring=DummySpring(), exclusion_radius=0.6)
-    print("Press 'r' to reset environment, 'q' to quit.")
-    # initial spawn
+    print("Press 'r' to reset environment (mountains), 'q' to quit.")
+
+    # Example: Initial spawn with customized mountains
     sim_iface.reset_environment(
-        n_towers=6, area_radius=2.0,
-        radius_range=(0.2,0.5), height_range=(0.1,0.4),
-        shape_options=9
+        n_items=5,  # Number of mountains
+        shape_options=9, # CoppeliaSim shape options
+        mountain_target_total_height=1.2,
+        mountain_max_cylinder_height=0.2,  # Shorter stairs
+        mountain_min_cylinder_height=0.05,
+        mountain_peak_radius=0.25,         # Wider top
+        mountain_base_radius_factor=4.0, # Less tapered
+        mountain_area_bounds_x=(-3.0, 3.0), # Custom placement area
+        mountain_area_bounds_y=(1.0, 4.0)
     )
+
     while True:
         u = np.random.uniform(-0.6,0.6,5)
         sim_iface.control(u)
         rgb, lidar = sim_iface.get_sensor_data(show=True)
-        if rgb is not None: print('RGB',rgb.shape)
-        if lidar is not None: print('LIDAR',lidar.shape[0])
+        if rgb is not None: pass # print('RGB',rgb.shape)
+        if lidar is not None: pass # print('LIDAR',lidar.shape[0])
+        
         key = cv2.waitKey(1)&0xFF
         if key==ord('r'):
+            print('Resetting environment with mountains...')
             sim_iface.reset_environment(
-                n_towers=6, area_radius=2.0,
-                radius_range=(0.2,0.5), height_range=(0.1,0.4),
-                shape_options=9
+                n_items=5,
+                shape_options=9,
+                mountain_target_total_height=1.2,
+                mountain_max_cylinder_height=0.2,
+                mountain_min_cylinder_height=0.05,
+                mountain_peak_radius=0.25,
+                mountain_base_radius_factor=4.0,
+                mountain_area_bounds_x=(-3.0, 3.0),
+                mountain_area_bounds_y=(1.0, 4.0)
             )
             print('Environment reset.')
         elif key==ord('q'):
             break
         time.sleep(sim_iface.dt)
+    
+    sim_iface.close()
