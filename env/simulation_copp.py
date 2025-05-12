@@ -62,26 +62,87 @@ class CoppeliaSimZMQInterface:
             except: vel[alias] = 0.0
         return pos, vel
 
-    def control(self, u):
-        u = -u; pos, vel = self._get_joint_states()
-        if '/Joint_0' not in pos or '/Joint_1' not in pos: return
-        q0,q2 = pos['/Joint_0']+self.q_cal[0], pos['/Joint_1']+self.q_cal[1]
-        dq0,dq2 = vel['/Joint_0'], vel['/Joint_1']
-        ts0,ts1 = self.spring_fn(q0=q0,q2=q2)
-        taus = [0.0]*5
-        taus[0],_,_ = self.actuator_q0.actuate(i=u[0], q_dot=dq0)
-        taus[1],_,_ = self.actuator_q2.actuate(i=u[1], q_dot=dq2)
-        taus[2],_,_ = self.actuator_rw1.actuate(i=u[2], q_dot=vel.get('/joint_rw0',0.0))
-        taus[3],_,_ = self.actuator_rw2.actuate(i=u[3], q_dot=vel.get('/joint_rw1',0.0))
-        taus[4],_,_ = self.actuator_rwz.actuate(i=u[4], q_dot=vel.get('/joint_rwz',0.0))
-        taus[0] += ts0; taus[1] += ts1
-        mapping = {'/Joint_0':taus[0],'/Joint_1':taus[1],'/joint_rw0':taus[2],'/joint_rw1':taus[3],'/joint_rwz':taus[4]}
-        for alias, torque in mapping.items():
-            h = self.joint_handles.get(alias)
-            if not h: continue
-            vcmd = 1000.0 if torque > 0 else (-1000.0 if torque < 0 else 0.0)
-            self.sim.setJointTargetVelocity(h, vcmd)
-            self.sim.setJointTargetForce(h, float(abs(torque)))
+    def control(self, action_from_rl): # 'action_from_rl' is from the RL agent, range [-1, 1], shape (5,)
+        # Invert the action (as per original logic: u = -u)
+        processed_action = -np.asarray(action_from_rl, dtype=np.float32)
+
+        pos, vel = self._get_joint_states()
+
+        # Ensure critical joints for spring calculation exist
+        if '/Joint_0' not in pos or '/Joint_1' not in pos:
+            # Optionally step simulation if other non-actuator logic needs to run
+            # self.sim.step() 
+            return
+
+        # Spring torque calculation (using q0 for Joint_0, q2 for Joint_1 as per original fn_spring call)
+        q0_spring = pos.get('/Joint_0', 0.0) + self.q_cal[0]
+        q1_spring_for_q2_param = pos.get('/Joint_1', 0.0) + self.q_cal[1] # Joint_1's position for spring's q2 param
+        ts0, ts1 = self.spring_fn(q0=q0_spring, q2=q1_spring_for_q2_param)
+
+        taus_from_actuators = [0.0] * 5 # Torques from actuators only
+
+        # --- Scale normalized actions to target currents and get actuator torques ---
+        # Original actuator instances: self.actuator_q0, self.actuator_q2, self.actuator_rw1, self.actuator_rw2, self.actuator_rwz
+        # Mapping from original code:
+        # processed_action[0] -> self.actuator_q0 (for Joint_0)
+        # processed_action[1] -> self.actuator_q2 (for Joint_1)
+        # processed_action[2] -> self.actuator_rw1 (for /joint_rw0)
+        # processed_action[3] -> self.actuator_rw2 (for /joint_rw1)
+        # processed_action[4] -> self.actuator_rwz (for /joint_rwz)
+
+        target_current_q0 = processed_action[0] * self.actuator_q0.i_max
+        dq0 = vel.get('/Joint_0', 0.0)
+        taus_from_actuators[0], _, _ = self.actuator_q0.actuate(i=target_current_q0, q_dot=dq0)
+
+        target_current_j1 = processed_action[1] * self.actuator_q2.i_max # Using self.actuator_q2 for action[1]
+        dq1 = vel.get('/Joint_1', 0.0)
+        taus_from_actuators[1], _, _ = self.actuator_q2.actuate(i=target_current_j1, q_dot=dq1)
+
+        target_current_rw0 = processed_action[2] * self.actuator_rw1.i_max # Using self.actuator_rw1 for action[2]
+        dqrw0 = vel.get('/joint_rw0', 0.0)
+        taus_from_actuators[2], _, _ = self.actuator_rw1.actuate(i=target_current_rw0, q_dot=dqrw0)
+
+        target_current_rw1 = processed_action[3] * self.actuator_rw2.i_max # Using self.actuator_rw2 for action[3]
+        dqrw1 = vel.get('/joint_rw1', 0.0)
+        taus_from_actuators[3], _, _ = self.actuator_rw2.actuate(i=target_current_rw1, q_dot=dqrw1)
+
+        target_current_rwz = processed_action[4] * self.actuator_rwz.i_max
+        dqrwz = vel.get('/joint_rwz', 0.0)
+        taus_from_actuators[4], _, _ = self.actuator_rwz.actuate(i=target_current_rwz, q_dot=dqrwz)
+        
+        # --- Combine actuator torques with spring torques ---
+        final_torques_to_apply = list(taus_from_actuators) 
+        final_torques_to_apply[0] += ts0 
+        final_torques_to_apply[1] += ts1 
+
+        # --- Apply torques to joints in simulation ---
+        # This mapping should align with the order of processed_action and your actuator setup
+        joint_torque_mapping = {
+            '/Joint_0': final_torques_to_apply[0],
+            '/Joint_1': final_torques_to_apply[1],
+            # '/Joint_2': 0.0, # Assuming no direct control from action vector
+            # '/Joint_3': 0.0, # Assuming no direct control from action vector
+            '/joint_rw0': final_torques_to_apply[2],
+            '/joint_rw1': final_torques_to_apply[3],
+            '/joint_rwz': final_torques_to_apply[4]
+        }
+
+        for alias, torque_value in joint_torque_mapping.items():
+            joint_handle = self.joint_handles.get(alias)
+            if not joint_handle:
+                continue # Silently skip if joint not found, or add print warning
+            
+            target_velocity_for_torque_mode = 1000.0 
+            if torque_value == 0.0:
+                self.sim.setJointTargetVelocity(joint_handle, 0.0)
+                self.sim.setJointTargetForce(joint_handle, 0.0) 
+            elif torque_value > 0:
+                self.sim.setJointTargetVelocity(joint_handle, target_velocity_for_torque_mode)
+                self.sim.setJointTargetForce(joint_handle, float(abs(torque_value)))
+            else: # torque_value < 0
+                self.sim.setJointTargetVelocity(joint_handle, -target_velocity_for_torque_mode)
+                self.sim.setJointTargetForce(joint_handle, float(abs(torque_value)))
+        
         self.sim.step()
 
     def get_sensor_data(self, show=False):

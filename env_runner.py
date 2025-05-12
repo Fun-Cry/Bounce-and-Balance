@@ -46,12 +46,12 @@ def setup_environment(use_camera_setup=True, custom_env_config=None, launch_head
         render_cfg = None # No human render for lidar in this basic setup
 
     # Attempt to launch CoppeliaSim
-    if not start_coppeliasim(selected_scene, headless=launch_headless):
-        print_manual_intervention_instructions(selected_scene)
-    else: # If auto-launch was attempted (successfully or not, it might already be running)
-        print(f"Proceeding to connect to CoppeliaSim (expected scene: '{selected_scene}').")
-        # A short pause to ensure ZMQ server is fully up if just launched
-        time.sleep(2)
+    # if not start_coppeliasim(selected_scene, headless=launch_headless):
+    #     print_manual_intervention_instructions(selected_scene)
+    # else: # If auto-launch was attempted (successfully or not, it might already be running)
+    #     print(f"Proceeding to connect to CoppeliaSim (expected scene: '{selected_scene}').")
+    #     # A short pause to ensure ZMQ server is fully up if just launched
+    #     time.sleep(2)
 
 
     # Prepare parameters for CoppeliaMountainEnv initialization
@@ -118,17 +118,17 @@ def train_with_stable_baselines3(env, total_timesteps=10000, save_path="./sb3_re
 if __name__ == '__main__':
     # This allows testing env_runner.py directly
     print("Running env_runner.py as main for testing...")
-    env = setup_environment(use_camera_setup=True, launch_headless=False, custom_env_config={"render_mode": None})
-    run_random_agent_test(env, num_episodes=10)
+    # env = setup_environment(use_camera_setup=True, launch_headless=False, custom_env_config={"render_mode": None})
+    # run_random_agent_test(env, num_episodes=10)
     
-    # env_for_sb3 = None
-    # try:
-    #     # For SB3, often better to run CoppeliaSim headless for speed if not debugging visually
-    #     env_for_sb3 = setup_environment(use_camera_setup=True, launch_headless=True, 
-    #                                      custom_env_config={"render_mode": None}) # No gym rendering for headless
-    #     if env_for_sb3:
-    #         train_with_stable_baselines3(env_for_sb3,  total_timesteps=20000) # Short training
-    # finally:
-    #     if env_for_sb3:
-    #         env_for_sb3.close()
-    #     stop_coppeliasim()
+    env_for_sb3 = None
+    try:
+        # For SB3, often better to run CoppeliaSim headless for speed if not debugging visually
+        env_for_sb3 = setup_environment(use_camera_setup=True, launch_headless=True, 
+                                         custom_env_config={"render_mode": None}) # No gym rendering for headless
+        if env_for_sb3:
+            train_with_stable_baselines3(env_for_sb3,  total_timesteps=20000) # Short training
+    finally:
+        if env_for_sb3:
+            env_for_sb3.close()
+        stop_coppeliasim()
