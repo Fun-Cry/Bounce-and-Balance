@@ -3,9 +3,11 @@ import gymnasium as gym
 import time
 import os
 from env.mountain_env import CoppeliaMountainEnv
-from utils.coppelia_launcher import start_coppeliasim, stop_coppeliasim # Use the launcher
+# from utils.coppelia_launcher import start_coppeliasim, stop_coppeliasim # Use the launcher
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
+from stable_baselines3.common.callbacks import CheckpointCallback
+
 
 # --- Default Configurations ---
 DEFAULT_SCENE_CAMERA = "rex_camera.ttt"
@@ -143,8 +145,13 @@ def train_with_stable_baselines3(env, total_timesteps=10000, save_path="./sb3_re
     #     print("No pre-existing model found, creating a new one.")
     
     # model.load("ppo_rex_30000_steps.zip")
+    checkpoint_callback = CheckpointCallback(
+        save_freq=10_000,  # Save every 10k steps
+        save_path=f"{save_path}_checkpoints",  # Folder to store checkpoints
+        name_prefix="ppo_rex"
+    )
         
-    model.learn(total_timesteps=total_timesteps)
+    model.learn(total_timesteps=total_timesteps, callback=checkpoint_callback, progress_bar=True)
     model.save(save_path)
     print(f"Training complete. Model saved to {save_path}.zip")
 
