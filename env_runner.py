@@ -144,7 +144,8 @@ def train_with_stable_baselines3(env, total_timesteps=10000, save_path="./sb3_re
     # else:
     #     print("No pre-existing model found, creating a new one.")
     
-    # model.load("ppo_rex_30000_steps.zip")
+    # model.load("sb3_rex_model_joints_only.zip")
+    model.load("v1.zip")
     checkpoint_callback = CheckpointCallback(
         save_freq=10_000,  # Save every 10k steps
         save_path=f"{save_path}_checkpoints",  # Folder to store checkpoints
@@ -213,5 +214,5 @@ if __name__ == '__main__':
         # You can choose to run a random agent test or train
         # run_random_agent_test(env_instance, num_episodes=2, steps_per_episode=100)
         
-        train_with_stable_baselines3(env_instance, total_timesteps=25000, save_path=f"./sb3_rex_model_{CURRENT_MODE}")
+        train_with_stable_baselines3(env_instance, total_timesteps=10 ** 5, save_path=f"./sb3_rex_model_{CURRENT_MODE}")
 
