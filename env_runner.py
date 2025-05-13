@@ -141,6 +141,8 @@ def train_with_stable_baselines3(env, total_timesteps=10000, save_path="./sb3_re
     #     model = PPO.load(model_load_path, env=env) # Make sure to pass the env or call set_env later
     # else:
     #     print("No pre-existing model found, creating a new one.")
+    
+    # model.load("ppo_rex_30000_steps.zip")
         
     model.learn(total_timesteps=total_timesteps)
     model.save(save_path)
