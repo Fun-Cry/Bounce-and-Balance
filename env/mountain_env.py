@@ -54,7 +54,8 @@ class CoppeliaMountainEnv(gym.Env):
             if rgb is None: img = np.zeros((res[1],res[0],3),dtype=np.uint8)
             elif rgb.shape[:2]!=(res[1],res[0]): img = cv2.resize(rgb,res,interpolation=cv2.INTER_AREA)
             else: img = rgb
-            obs["image"] = img
+            obs["image"] = np.zeros((res[1],res[0],3),dtype=np.uint8)
+            # for simplifying the matter
         elif self.sensor_config['type'] == 'lidar':
             pts = self.sensor_config.get('max_points',500)
             if lidar is None or lidar.shape[0]==0: l_pts = np.zeros((pts,3),dtype=np.float32)

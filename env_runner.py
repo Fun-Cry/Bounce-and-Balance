@@ -98,7 +98,8 @@ def train_with_stable_baselines3(env, total_timesteps=10000, save_path="./sb3_re
     Trains an agent using Stable Baselines3.
     """
     print(f"\n--- Starting Stable Baselines3 Training with PPO") 
-    model = PPO("MultiInputPolicy", env, verbose=1)
+    model = PPO("MultiInputPolicy", env, verbose=1, learning_rate=1e-5)
+    # model.load("sb3_rex_model.zip")
     model.learn(total_timesteps=total_timesteps)
     model.save(save_path)
     print(f"Training complete. Model saved to {save_path}.zip")
@@ -117,7 +118,7 @@ def train_with_stable_baselines3(env, total_timesteps=10000, save_path="./sb3_re
 
 if __name__ == '__main__':
     # This allows testing env_runner.py directly
-    print("Running env_runner.py as main for testing...")
+    # print("Running env_runner.py as main for testing...")
     # env = setup_environment(use_camera_setup=True, launch_headless=False, custom_env_config={"render_mode": None})
     # run_random_agent_test(env, num_episodes=10)
     

@@ -56,10 +56,8 @@ class CoppeliaSimZMQInterface:
     def _get_joint_states(self):
         pos, vel = {}, {}
         for alias, h in self.joint_handles.items():
-            try: pos[alias] = self.sim.getJointPosition(h)
-            except: pos[alias] = 0.0
-            try: vel[alias] = self.sim.getJointVelocity(h)
-            except: vel[alias] = 0.0
+            pos[alias] = self.sim.getJointPosition(h)
+            vel[alias] = self.sim.getJointVelocity(h)
         return pos, vel
 
     def control(self, action_from_rl): # 'action_from_rl' is from the RL agent, range [-1, 1], shape (5,)
