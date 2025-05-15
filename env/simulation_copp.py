@@ -11,7 +11,7 @@ from . import actuator, actuator_param # Assuming actuator.py/actuator_param.py 
 from .scene_elements import generate_random_mountain
 
 class CoppeliaSimZMQInterface:
-    def __init__(self, spring, joint_aliases=None, dt=1e-3, q_cal=None, exclusion_radius=0.5):
+    def __init__(self, spring, joint_aliases=None, dt=1e-2, q_cal=None, exclusion_radius=0.5):
         if q_cal is None: q_cal = np.zeros(2)
         self.dt = dt
         self.q_cal = np.array(q_cal)

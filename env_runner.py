@@ -134,7 +134,7 @@ def train_with_stable_baselines3(env, total_timesteps=10000, save_path="./sb3_re
     #         print("Could not find 'image' extractor in model.policy.features_extractor.extractors to freeze.")
 
 
-    model = PPO("MultiInputPolicy", env, verbose=1, learning_rate=3e-4, n_steps=1024, batch_size=64, n_epochs=10, gamma=0.99, gae_lambda=0.95)
+    model = PPO("MultiInputPolicy", env, verbose=1, n_steps=320)
     
     # Example of loading a pre-existing model:
     # model_load_path = save_path + ".zip"
@@ -145,7 +145,7 @@ def train_with_stable_baselines3(env, total_timesteps=10000, save_path="./sb3_re
     #     print("No pre-existing model found, creating a new one.")
     
     # model.load("sb3_rex_model_joints_only.zip")
-    model.load("v1.zip")
+    model.load("ppo_rex_10000_steps.zip")
     checkpoint_callback = CheckpointCallback(
         save_freq=10_000,  # Save every 10k steps
         save_path=f"{save_path}_checkpoints",  # Folder to store checkpoints
