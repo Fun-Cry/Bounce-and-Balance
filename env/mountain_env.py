@@ -16,21 +16,25 @@ class CoppeliaMountainEnv(gym.Env):
 
     def __init__(self, render_mode=None, scene_params=None, sensor_config=None,
                  max_episode_steps=1000, mode='normal', spin_penalty_factor=0.01,
-                 upward_velocity_reward_factor=10.0): # Added upward_velocity_reward_factor
+                 angle_max_reward: float = 100.0,
+                 angle_activation_deg: float = 30.0,
+                 angle_min_vz_threshold: float = 0.01,
+                 angle_min_speed_threshold: float = 0.05
+                 ):
         super().__init__()
 
-        # The dt in CoppeliaSimZMQInterface's __init__ defaults to 1e-2 (0.01s).
-        # This means:
-        # 1. CoppeliaSim's "simulation dt" should be set to 0.01 seconds (100Hz).
-        # 2. CoppeliaSim's "dynamics dt" should be <= 0.01s (e.g., 0.01s or 0.005s).
-        # The self.sim_iface.dt will be 0.01 unless a different dt is passed here.
-        self.sim_iface = CoppeliaSimZMQInterface(spring=DummySpring()) # Uses default dt=1e-2 from simulation_copp.py
+        self.sim_iface = CoppeliaSimZMQInterface(spring=DummySpring())
         
         self.render_mode = render_mode
         self.sensor_config = sensor_config if sensor_config else {'type': 'camera', 'resolution': (64, 64)}
         self.mode = mode
         self.spin_penalty_factor = spin_penalty_factor
-        self.upward_velocity_reward_factor = upward_velocity_reward_factor
+        
+        # Parameters for the angle-based upward movement reward
+        self.angle_max_reward = angle_max_reward
+        self.angle_activation_deg = angle_activation_deg
+        self.angle_min_vz_threshold = angle_min_vz_threshold
+        self.angle_min_speed_threshold = angle_min_speed_threshold
 
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32)
         
@@ -43,10 +47,8 @@ class CoppeliaMountainEnv(gym.Env):
             obs_dict["lidar_points"] = spaces.Box(low=-np.inf,high=np.inf,shape=(pts,3),dtype=np.float32)
         else: raise ValueError(f"Unsupported sensor_type: {self.sensor_config['type']}")
         
-        # Assuming 7 joints: Joint_0, Joint_1, Joint_2, Joint_3, joint_rw0, joint_rw1, joint_rwz
-        # So 7 positions + 7 velocities = 14 states
         obs_dict["joint_states"] = spaces.Box(low=-np.inf,high=np.inf,shape=(14,),dtype=np.float32)
-        obs_dict["imu_data"] = spaces.Box(low=-np.inf, high=np.inf, shape=(6,), dtype=np.float32) # 3 linear vel + 3 angular vel
+        obs_dict["imu_data"] = spaces.Box(low=-np.inf, high=np.inf, shape=(6,), dtype=np.float32)
         self.observation_space = spaces.Dict(obs_dict)
 
         self.default_scene_params = {
@@ -62,12 +64,39 @@ class CoppeliaMountainEnv(gym.Env):
         
         self.max_episode_steps = max_episode_steps
         self.current_step_count = 0
-        self.fall_height_threshold = 0.1 # Adjusted based on typical robot scale
-        self.fall_angle_threshold = np.deg2rad(60) # Radians
+        self.fall_height_threshold = 0.2
+        self.fall_angle_threshold = np.deg2rad(60)
 
         if self.mode == 'joints_only':
             print("INFO: Environment initialized in 'joints_only' mode. Image data will be zeroed, and no scenery will be spawned.")
 
+    def _calculate_upward_direction_reward(self, linear_velocity_xyz: np.ndarray) -> float:
+        """
+        Calculates a reward for moving upwards, within a specified cone.
+        """
+        movement_direction = np.array(linear_velocity_xyz, dtype=np.float32)
+        up_vector = np.array([0, 0, 1], dtype=np.float32)
+
+        vertical_velocity_component = movement_direction[2]
+        norm_movement = np.linalg.norm(movement_direction)
+
+        if norm_movement < self.angle_min_speed_threshold:
+            return 0.0
+        if vertical_velocity_component < self.angle_min_vz_threshold:
+            return 0.0
+
+        dot_product = vertical_velocity_component # since up_vector is (0,0,1) and dot(A,B) = AxBx + AyBy + AzBz
+        cos_angle = dot_product / norm_movement
+        cos_angle = np.clip(cos_angle, -1.0, 1.0)
+        angle_rad = np.arccos(cos_angle)
+        angle_deg = np.degrees(angle_rad)
+
+        if angle_deg <= self.angle_activation_deg:
+            scaled_angle_rad_for_cosine = (angle_deg / self.angle_activation_deg) * (np.pi / 2.0)
+            reward = self.angle_max_reward * np.cos(scaled_angle_rad_for_cosine)
+            return max(0.0, reward)
+        else:
+            return 0.0
 
     def _get_observation(self):
         rgb, lidar = self.sim_iface.get_sensor_data()
@@ -98,7 +127,6 @@ class CoppeliaMountainEnv(gym.Env):
                     l_pts = np.vstack((lidar, np.zeros((pts-num_avail,3),dtype=np.float32)))
             obs["lidar_points"] = l_pts
         
-        # Ensure all expected joint aliases are present for consistent observation shape
         aliases = ['/Joint_0','/Joint_1','/Joint_2','/Joint_3','/joint_rw0','/joint_rw1','/joint_rwz']
         pos_arr = np.array([j_pos.get(k,0.0) for k in aliases],dtype=np.float32)
         vel_arr = np.array([j_vel.get(k,0.0) for k in aliases],dtype=np.float32)
@@ -115,7 +143,7 @@ class CoppeliaMountainEnv(gym.Env):
             params = self.current_scene_params
         
         if self.mode == 'joints_only':
-            self.sim_iface.reset_environment(sequential=True) # No scenery spawned
+            self.sim_iface.reset_environment(sequential=True)
         else:
             self.sim_iface.reset_environment(**params)
 
@@ -126,58 +154,46 @@ class CoppeliaMountainEnv(gym.Env):
         return obs, {}
 
     def step(self, action):
-        self.sim_iface.control(action) # This internally calls self.sim.step()
+        self.sim_iface.control(action)
         self.current_step_count+=1
         obs = self._get_observation()
-        reward = 0.0 # Initialize reward for the step
+        reward = 0.0
         terminated = False
         truncated = False
         
-        current_height = 0.0 # Default height if not available
-        upward_velocity_bonus = 0.0
+        current_height = 0.0
+        # upward_movement_angle_bonus = 0.0 # Renamed for clarity, value calculated below
         spin_penalty = 0.0
 
         if self.sim_iface.robot_base:
             try:
-                pos = self.sim_iface.sim.getObjectPosition(self.sim_iface.robot_base, -1) # Use world frame
+                pos = self.sim_iface.sim.getObjectPosition(self.sim_iface.robot_base, -1)
                 current_height = float(pos[2])
-                reward = current_height # Base reward is height
+                reward = current_height 
 
-                orient_euler = self.sim_iface.sim.getObjectOrientation(self.sim_iface.robot_base, -1) # Euler angles in radians
+                orient_euler = self.sim_iface.sim.getObjectOrientation(self.sim_iface.robot_base, -1)
                 
                 base_lin_vel, base_ang_vel = self.sim_iface.get_base_imu_data()
                 
-                # Spin penalty
-                # Penalize angular velocity around the world Z-axis, or overall spin
-                # base_ang_vel[2] is yaw rate if IMU is aligned with world frame when robot is flat
-                # Using magnitude for general spin penalty
                 spin_magnitude = np.linalg.norm(base_ang_vel) 
                 spin_penalty = self.spin_penalty_factor * spin_magnitude
                 reward -= spin_penalty
 
-                # Upward velocity reward
-                upward_velocity_z = base_lin_vel[2] # Z-component of linear velocity in world frame
-                if upward_velocity_z > 0:
-                    upward_velocity_bonus = self.upward_velocity_reward_factor * upward_velocity_z
-                    reward += upward_velocity_bonus
+                # New Upward Movement Direction Reward
+                upward_movement_angle_bonus = self._calculate_upward_direction_reward(base_lin_vel)
+                reward += upward_movement_angle_bonus
                 
-                # Termination conditions
-                # Fall detection based on orientation (roll and pitch angles)
                 tilted_too_much = abs(orient_euler[0]) > self.fall_angle_threshold or \
                                   abs(orient_euler[1]) > self.fall_angle_threshold
                 
-                # Fall detection based on height (relative to initial or an absolute minimum)
-                # Assuming initial_base_pos[2] is the starting height on flat ground.
-                # Or use a fixed low threshold if starting on uneven terrain.
-                # For simplicity, using self.fall_height_threshold as an absolute minimum.
                 fallen_too_low = current_height < self.fall_height_threshold 
 
-                if tilted_too_much or fallen_too_low:
+                if  fallen_too_low:
                     terminated = True
-                    reward = -200.0 # Significant penalty for falling
+                    reward = -200.0
             except Exception as e:
-                # print(f"Warning: Could not compute reward components: {e}") # Optional for debugging
-                pass # Keep going if minor sim error
+                # print(f"Warning: Could not compute reward components: {e}")
+                pass 
         
         if not terminated and self.current_step_count >= self.max_episode_steps:
             truncated = True
@@ -192,19 +208,17 @@ class CoppeliaMountainEnv(gym.Env):
             img = img_obs.get("image")
             if img is not None:
                 if self.render_mode=="human":
-                    # Ensure window exists before trying to show image
                     if cv2.getWindowProperty(self.window_name, cv2.WND_PROP_VISIBLE) < 1:
-                         cv2.namedWindow(self.window_name, cv2.WINDOW_AUTOSIZE) # Recreate if closed
+                        cv2.namedWindow(self.window_name, cv2.WINDOW_AUTOSIZE)
                     cv2.imshow(self.window_name,cv2.cvtColor(img,cv2.COLOR_RGB2BGR))
                     cv2.waitKey(1)
                 else: # rgb_array
-                    return cv2.cvtColor(img,cv2.COLOR_RGB2BGR) # Return BGR for consistency if other tools expect it
+                    return cv2.cvtColor(img,cv2.COLOR_RGB2BGR)
         return None
 
     def close(self):
-        self.sim_iface.close() # This should stop simulation and release ZMQ client
+        self.sim_iface.close()
         if self.render_mode=="human" and self.sensor_config['type']=='camera':
-            # Check if window exists before trying to destroy
             if cv2.getWindowProperty(self.window_name, cv2.WND_PROP_VISIBLE) >= 1:
                 cv2.destroyWindow(self.window_name)
-            cv2.waitKey(1) # Allow time for CV2 to process window closure
+            cv2.waitKey(1)
