@@ -169,7 +169,7 @@ class CoppeliaMountainEnv(gym.Env):
             try:
                 pos = self.sim_iface.sim.getObjectPosition(self.sim_iface.robot_base, -1)
                 current_height = float(pos[2])
-                reward = current_height 
+                reward = 0
 
                 orient_euler = self.sim_iface.sim.getObjectOrientation(self.sim_iface.robot_base, -1)
                 
@@ -182,6 +182,16 @@ class CoppeliaMountainEnv(gym.Env):
                 # New Upward Movement Direction Reward
                 upward_movement_angle_bonus = self._calculate_upward_direction_reward(base_lin_vel)
                 reward += upward_movement_angle_bonus
+                
+                vz = base_lin_vel[2]
+                if vz < 0.0:
+                    # tilt angle from vertical = sqrt(roll^2 + pitch^2)
+                    tilt = np.sqrt(orient_euler[0]**2 + orient_euler[1]**2)
+                    # only reward while under the fall‐angle threshold
+                    if tilt < self.fall_angle_threshold:
+                        straightness = 1.0 - (tilt / self.fall_angle_threshold)
+                        downward_straight_reward = self.angle_max_reward * straightness
+                        reward += downward_straight_reward
                 
                 tilted_too_much = abs(orient_euler[0]) > self.fall_angle_threshold or \
                                   abs(orient_euler[1]) > self.fall_angle_threshold
