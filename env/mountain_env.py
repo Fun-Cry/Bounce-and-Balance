@@ -23,15 +23,19 @@ class CoppeliaMountainEnv(gym.Env):
                  downward_straightness_reward_scale: float = 1.0,
                  # --- Parameters for MINIMAL "Land Well" reward ---
                  land_impact_vz_penalty_scale: float = 0.5, 
-                 land_impact_upright_bonus: float = 20.0,   
-                 land_impact_max_tilt_deg: float = 25.0,    
+                 land_impact_upright_bonus: float = 20.0,  
+                 land_impact_max_tilt_deg: float = 25.0,   
                  land_detection_falling_vz_thresh: float = -0.1, 
                  land_detection_landed_vz_thresh: float = -0.05, 
                  land_detection_height_offset: float = 0.03,
                  # --- Parameters for Link Spread Straightness ---
                  max_link_spread_x: float = 0.2, # Max allowed X-distance between Link_2 and Link_3 (meters)
                  max_link_spread_y: float = 0.2, # Max allowed Y-distance between Link_2 and Link_3 (meters)
-                 link_spread_penalty_factor: float = 5.0 # Penalty factor for exceeding link spread thresholds
+                 link_spread_penalty_factor: float = 5.0, # Penalty factor for exceeding link spread thresholds
+                 # --- Parameters for Jump Count Reward ---
+                 jump_count_height_threshold: float = 0.5,
+                 jump_count_reward_value: float = 50.0,
+                 jump_count_reward_weight: float = 1.0
                  ):
         super().__init__()
 
@@ -61,6 +65,13 @@ class CoppeliaMountainEnv(gym.Env):
         self.max_link_spread_x = max_link_spread_x
         self.max_link_spread_y = max_link_spread_y
         self.link_spread_penalty_factor = link_spread_penalty_factor
+
+        # --- Store Jump Count Reward parameters ---
+        self.jump_count_height_threshold = jump_count_height_threshold
+        self.jump_count_reward_value = jump_count_reward_value
+        self.jump_count_reward_weight = jump_count_reward_weight
+        self._was_above_jump_count_threshold = False
+
 
         # --- Get handles for specified links for spread calculation ---
         self.link2_name = "/Link_2_respondable"
@@ -194,11 +205,11 @@ class CoppeliaMountainEnv(gym.Env):
                     if not (pos_link2 and isinstance(pos_link2, (list, tuple)) and len(pos_link2) == 3):
                         print(f"Warning: CoppeliaMountainEnv (_calculate_downward_straightness_reward) - Could not get valid world position for {self.link2_name}. Received: {pos_link2}.")
                     if not (pos_link3 and isinstance(pos_link3, (list, tuple)) and len(pos_link3) == 3):
-                         print(f"Warning: CoppeliaMountainEnv (_calculate_downward_straightness_reward) - Could not get valid world position for {self.link3_name}. Received: {pos_link3}.")
+                            print(f"Warning: CoppeliaMountainEnv (_calculate_downward_straightness_reward) - Could not get valid world position for {self.link3_name}. Received: {pos_link3}.")
                     # straightness_from_link_spread remains 1.0 (no penalty)
             elif self.link2_handle is None or self.link3_handle is None:
-                 print(f"Warning: CoppeliaMountainEnv (_calculate_downward_straightness_reward) - Handles for {self.link2_name} or {self.link3_name} not available. Skipping spread calculation.")
-                 # straightness_from_link_spread remains 1.0
+                    print(f"Warning: CoppeliaMountainEnv (_calculate_downward_straightness_reward) - Handles for {self.link2_name} or {self.link3_name} not available. Skipping spread calculation.")
+                # straightness_from_link_spread remains 1.0
 
             # Combine the two straightness measures by multiplication
             combined_straightness = straightness_from_tilt * straightness_from_link_spread
@@ -227,6 +238,20 @@ class CoppeliaMountainEnv(gym.Env):
                 
         return landing_reward
 
+    def _calculate_jump_count_event_reward(self, current_height: float) -> float:
+        """
+        Calculates reward for crossing the jump height threshold upwards.
+        Returns a fixed reward value if a new jump event is detected.
+        """
+        reward_for_jump_event = 0.0
+        is_currently_above = current_height > self.jump_count_height_threshold
+
+        if is_currently_above and not self._was_above_jump_count_threshold:
+            reward_for_jump_event = self.jump_count_reward_value
+        
+        self._was_above_jump_count_threshold = is_currently_above
+        return reward_for_jump_event
+
     def _check_fall_termination_and_penalty(self, current_height: float) -> tuple[bool, float]:
         """Checks if the robot has fallen (hit the ground) and returns termination status and penalty."""
         terminated_by_fall = False
@@ -234,7 +259,7 @@ class CoppeliaMountainEnv(gym.Env):
         
         if current_height < self.fall_height_threshold:
             terminated_by_fall = True
-            fall_penalty = -200.0 
+            # fall_penalty = -200.0 
         return terminated_by_fall, fall_penalty
 
     # --- Core Gym Methods ---
@@ -278,6 +303,7 @@ class CoppeliaMountainEnv(gym.Env):
 
         self.current_step_count = 0
         self.previous_base_lin_vel_z = 0.0 
+        self._was_above_jump_count_threshold = False
 
         obs = self._get_observation()
         if "imu_data" in obs: 
@@ -305,7 +331,7 @@ class CoppeliaMountainEnv(gym.Env):
         if self.sim_iface.robot_base:
             pos = self.sim_iface.sim.getObjectPosition(self.sim_iface.robot_base, -1) 
             if pos and isinstance(pos, (list, tuple)) and len(pos) == 3:
-                 current_height = float(pos[2])
+                current_height = float(pos[2])
             else:
                 print(f"Warning: CoppeliaMountainEnv (step) - Could not get valid position for robot_base handle '{self.sim_iface.robot_base}'. Received: {pos}. Terminating.")
                 terminated = True
@@ -319,12 +345,17 @@ class CoppeliaMountainEnv(gym.Env):
             else:
                 print(f"Warning: CoppeliaMountainEnv (step) - Could not get valid orientation for robot_base handle '{self.sim_iface.robot_base}'. Received: {sim_orient_euler}. Using default orientation.")
             
-            reward_spin = self._calculate_spin_penalty(base_ang_vel)
-            reward_upward = self._calculate_upward_direction_reward(base_lin_vel)
-            reward_downward_straight = self._calculate_downward_straightness_reward(orientation_euler_rad, current_vz) 
-            reward_landing = self._calculate_landing_reward(orientation_euler_rad, current_height, current_vz, self.previous_base_lin_vel_z)
+            # reward_spin = self._calculate_spin_penalty(base_ang_vel)
+            # reward_upward = self._calculate_upward_direction_reward(base_lin_vel)
+            # reward_downward_straight = self._calculate_downward_straightness_reward(orientation_euler_rad, current_vz) 
+            # reward_landing = self._calculate_landing_reward(orientation_euler_rad, current_height, current_vz, self.previous_base_lin_vel_z)
+            reward_jump_count_event = self._calculate_jump_count_event_reward(current_height)
             
-            total_reward = 15 * reward_spin + 50 * reward_upward + 20 * reward_downward_straight + 30 * reward_landing
+            # total_reward = (15 * reward_spin + 
+            #                 50 * reward_upward + 
+            #                 20 * reward_downward_straight + 
+            #                 30 * reward_landing)
+            total_reward = self.jump_count_reward_weight * reward_jump_count_event
             
             terminated_by_fall, fall_penalty = self._check_fall_termination_and_penalty(current_height)
             if terminated_by_fall:
@@ -368,4 +399,4 @@ class CoppeliaMountainEnv(gym.Env):
         if self.render_mode=="human" and self.sensor_config['type']=='camera':
             if cv2.getWindowProperty(self.window_name, cv2.WND_PROP_VISIBLE) >= 1:
                 cv2.destroyWindow(self.window_name)
-                cv2.waitKey(1) 
+                cv2.waitKey(1)
