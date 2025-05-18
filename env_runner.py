@@ -228,4 +228,5 @@ if __name__ == '__main__':
         # run_random_agent_test(env_instance, num_episodes=2, steps_per_episode=100)
         
         train_with_stable_baselines3(env_instance, total_timesteps=10 ** 6, save_path=f"./sb3_rex_model_{CURRENT_MODE}")
+        train_with_stable_baselines3(env_instance, total_timesteps=10 ** 6, save_path=f"./sb3_rex_model_{CURRENT_MODE}")
 
