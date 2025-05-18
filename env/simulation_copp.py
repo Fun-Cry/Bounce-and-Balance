@@ -16,7 +16,7 @@ class CoppeliaSimZMQInterface:
         self.dt = dt
         self.q_cal = np.array(q_cal)
         self.exclusion_radius = exclusion_radius
-        self.client = RemoteAPIClient()
+        self.client = RemoteAPIClient(protocol='websocket', port=23050)
         self.sim = self.client.getObject('sim')
 
         try:
