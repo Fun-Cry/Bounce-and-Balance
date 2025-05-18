@@ -94,7 +94,7 @@ def setup_environment(use_camera_setup=True, custom_env_config=None, launch_head
 
     return env
 
-def run_random_agent_test(env, num_episodes=3, steps_per_episode=200):
+def run_random_agent_test(env, num_episodes=3, steps_per_episode=500):
     """Runs a simple test with a random agent."""
     print(f"\n--- Starting Random Agent Test (Mode: {env.mode}) ---")
     for episode_idx in range(1, num_episodes + 1):
@@ -134,7 +134,16 @@ def train_with_stable_baselines3(env, total_timesteps=10000, save_path="./sb3_re
     #         print("Could not find 'image' extractor in model.policy.features_extractor.extractors to freeze.")
 
 
-    model = PPO("MultiInputPolicy", env, verbose=1, n_steps=320)
+    model = PPO("MultiInputPolicy", 
+                env, 
+                verbose=1, 
+                learning_rate = 0.0006142371009313793, 
+                gamma = 0.9718775096156099, 
+                clip_range=0.26873643566861616, 
+                n_epochs=10, 
+                gae_lambda=0.9662492048486523,
+                n_steps=500
+                )
     
     # Example of loading a pre-existing model:
     # model_load_path = save_path + ".zip"
@@ -145,14 +154,18 @@ def train_with_stable_baselines3(env, total_timesteps=10000, save_path="./sb3_re
     #     print("No pre-existing model found, creating a new one.")
     
     # model.load("sb3_rex_model_joints_only.zip")
-    model.load("ppo_rex_10000_steps.zip")
+    # model.load("ppo_rex_820000_steps.zip")
     checkpoint_callback = CheckpointCallback(
         save_freq=10_000,  # Save every 10k steps
         save_path=f"{save_path}_checkpoints",  # Folder to store checkpoints
         name_prefix="ppo_rex"
     )
         
-    model.learn(total_timesteps=total_timesteps, callback=checkpoint_callback, progress_bar=True)
+    model.learn(
+        total_timesteps=total_timesteps, 
+        callback=checkpoint_callback, 
+        progress_bar=True
+    )
     model.save(save_path)
     print(f"Training complete. Model saved to {save_path}.zip")
 
@@ -214,5 +227,5 @@ if __name__ == '__main__':
         # You can choose to run a random agent test or train
         # run_random_agent_test(env_instance, num_episodes=2, steps_per_episode=100)
         
-        train_with_stable_baselines3(env_instance, total_timesteps=10 ** 5, save_path=f"./sb3_rex_model_{CURRENT_MODE}")
+        train_with_stable_baselines3(env_instance, total_timesteps=10 ** 6, save_path=f"./sb3_rex_model_{CURRENT_MODE}")
 

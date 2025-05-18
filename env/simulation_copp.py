@@ -192,7 +192,7 @@ class CoppeliaSimZMQInterface:
         if initial_leg_angles is None:
             # Default initial angles for leg joints (/Joint_0, /Joint_1)
             # You can customize these values
-            initial_leg_angles = {'/Joint_0': 0.0, '/Joint_1': 0.0} 
+            initial_leg_angles = {'/Joint_0': 0.0, '/Joint_1': 0.0, '/Joint_2': 0.0, '/Joint_3': 0.0} 
         
         for alias in self.controlled_joint_aliases:
             joint_handle = self.joint_handles.get(alias)

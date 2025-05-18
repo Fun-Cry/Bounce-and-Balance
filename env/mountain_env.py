@@ -33,7 +33,7 @@ class CoppeliaMountainEnv(gym.Env):
                  max_link_spread_y: float = 0.2, # Max allowed Y-distance between Link_2 and Link_3 (meters)
                  link_spread_penalty_factor: float = 5.0, # Penalty factor for exceeding link spread thresholds
                  # --- Parameters for Jump Count Reward ---
-                 jump_count_height_threshold: float = 0.5,
+                 jump_count_height_threshold: float = 0.4,
                  jump_count_reward_value: float = 50.0,
                  jump_count_reward_weight: float = 1.0
                  ):
@@ -317,7 +317,8 @@ class CoppeliaMountainEnv(gym.Env):
         self.current_step_count += 1
         obs = self._get_observation()
         
-        total_reward = 0.0
+        # total_reward = 0.0
+        total_reward = 1.0
         terminated = False
         truncated = False
         
@@ -355,12 +356,12 @@ class CoppeliaMountainEnv(gym.Env):
             #                 50 * reward_upward + 
             #                 20 * reward_downward_straight + 
             #                 30 * reward_landing)
-            total_reward = self.jump_count_reward_weight * reward_jump_count_event
+            # total_reward = self.jump_count_reward_weight * reward_jump_count_event
             
             terminated_by_fall, fall_penalty = self._check_fall_termination_and_penalty(current_height)
             if terminated_by_fall:
                 terminated = True
-                total_reward = fall_penalty 
+                total_reward -= fall_penalty 
         else:
             print("Warning: CoppeliaMountainEnv (step) - self.sim_iface.robot_base is not valid. Terminating episode.")
             terminated = True
