@@ -1,0 +1,3 @@
+python demo.py --checkpoint_path raw_input.zip --raw
+python demo.py --checkpoint_path cur_version.zip
+python demo.py --checkpoint_path new_reward.zip --mode normal

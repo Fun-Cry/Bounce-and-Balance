@@ -77,7 +77,7 @@ def setup_environment(use_camera_setup=True, custom_env_config=None, launch_head
     if custom_env_config: # Allow selective overrides from the calling script
         env_init_params.update(custom_env_config)
 
-    env = CoppeliaMountainEnv(**env_init_params)
+    env = CoppeliaMountainEnv(**env_init_params, raw=True)
     print("\n--- Environment Initialized ---")
     print(f"Selected Mode: {env.mode}")
     print(f"Observation Space: {env.observation_space}")
@@ -132,7 +132,11 @@ def train_with_stable_baselines3(env, total_timesteps=10000, save_path="./sb3_re
     #         print("Image feature extractor weights frozen.")
     #     else:
     #         print("Could not find 'image' extractor in model.policy.features_extractor.extractors to freeze.")
-
+    
+    # layer_sizes = [256] * 3
+    # policy_kwargs = dict(
+    #     net_arch=dict(pi=layer_sizes, vf=layer_sizes)  
+    # )
 
     model = PPO("MultiInputPolicy", 
                 env, 
@@ -142,7 +146,8 @@ def train_with_stable_baselines3(env, total_timesteps=10000, save_path="./sb3_re
                 clip_range=0.26873643566861616, 
                 n_epochs=10, 
                 gae_lambda=0.9662492048486523,
-                n_steps=500
+                n_steps=500,
+                # policy_kwargs=policy_kwargs
                 )
     
     # Example of loading a pre-existing model:
@@ -154,7 +159,7 @@ def train_with_stable_baselines3(env, total_timesteps=10000, save_path="./sb3_re
     #     print("No pre-existing model found, creating a new one.")
     
     # model.load("sb3_rex_model_joints_only.zip")
-    # model.load("ppo_rex_820000_steps.zip")
+    # model.load("ppo_rex_360000_steps.zip")
     checkpoint_callback = CheckpointCallback(
         save_freq=10_000,  # Save every 10k steps
         save_path=f"{save_path}_checkpoints",  # Folder to store checkpoints
@@ -218,7 +223,7 @@ if __name__ == '__main__':
         launch_headless=LAUNCH_COPPELIASIM_HEADLESS,
         mode=CURRENT_MODE,
         custom_env_config={
-            "render_mode": "human" if not LAUNCH_COPPELIASIM_HEADLESS and CURRENT_MODE == 'normal' else None,
+            "render_mode":  None,
                 # Add other specific overrides if needed
         }
     )

@@ -35,16 +35,18 @@ class CoppeliaMountainEnv(gym.Env):
                  # --- Parameters for Jump Count Reward ---
                  jump_count_height_threshold: float = 0.4,
                  jump_count_reward_value: float = 50.0,
-                 jump_count_reward_weight: float = 1.0
+                 jump_count_reward_weight: float = 1.0,
+                 raw=False,
+                 dt=5e-2
                  ):
         super().__init__()
 
-        self.sim_iface = CoppeliaSimZMQInterface(spring=DummySpring())
+        self.sim_iface = CoppeliaSimZMQInterface(spring=DummySpring(), dt=dt)
         
         self.render_mode = render_mode
         self.sensor_config = sensor_config if sensor_config else {'type': 'camera', 'resolution': (64, 64)}
         self.mode = mode
-        
+        self.raw=raw
         # Reward parameters
         self.spin_penalty_factor = spin_penalty_factor
         self.angle_max_reward = angle_max_reward
@@ -104,7 +106,9 @@ class CoppeliaMountainEnv(gym.Env):
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32)
         
         obs_dict = {}
-        if self.sensor_config['type'] == 'camera':
+        if self.mode == 'joints_only':
+            obs_dict = {}
+        elif self.sensor_config['type'] == 'camera':
             res = self.sensor_config.get('resolution', (64,64))
             obs_dict["image"] = spaces.Box(low=0,high=255,shape=(res[1],res[0],3),dtype=np.uint8)
         elif self.sensor_config['type'] == 'lidar':
@@ -129,7 +133,7 @@ class CoppeliaMountainEnv(gym.Env):
         
         self.max_episode_steps = max_episode_steps
         self.current_step_count = 0
-        self.fall_height_threshold = 0.2 
+        self.fall_height_threshold = 0.15
         self.fall_angle_threshold_rad = np.deg2rad(60) 
 
         self.previous_base_lin_vel_z = 0.0
@@ -275,7 +279,8 @@ class CoppeliaMountainEnv(gym.Env):
             elif rgb is None: img = np.zeros((res[1], res[0], 3), dtype=np.uint8)
             elif rgb.shape[:2] != (res[1], res[0]): img = cv2.resize(rgb, res, interpolation=cv2.INTER_AREA)
             else: img = rgb
-            obs["image"] = img
+            
+            if self.mode != 'joints_only': obs["image"] = img
         elif self.sensor_config['type'] == 'lidar':
             pts = self.sensor_config.get('max_points',500)
             if lidar is None or lidar.shape[0]==0: l_pts = np.zeros((pts,3),dtype=np.float32)
@@ -283,7 +288,7 @@ class CoppeliaMountainEnv(gym.Env):
                 num_avail = lidar.shape[0]
                 if num_avail>=pts: l_pts = lidar[:pts,:]
                 else: l_pts = np.vstack((lidar, np.zeros((pts-num_avail,3),dtype=np.float32)))
-            obs["lidar_points"] = l_pts
+            # obs["lidar_points"] = l_pts
         
         aliases = ['/Joint_0','/Joint_1','/Joint_2','/Joint_3','/joint_rw0','/joint_rw1','/joint_rwz']
         pos_arr = np.array([j_pos.get(k,0.0) for k in aliases],dtype=np.float32)
@@ -313,12 +318,15 @@ class CoppeliaMountainEnv(gym.Env):
         return obs, {}
 
     def step(self, action):
-        self.sim_iface.control(action)
+        if self.raw:
+            self.sim_iface.control_raw(action)
+        else:
+            self.sim_iface.control(action)
         self.current_step_count += 1
         obs = self._get_observation()
         
         # total_reward = 0.0
-        total_reward = 1.0
+        # total_reward = 1.0
         terminated = False
         truncated = False
         
@@ -350,13 +358,14 @@ class CoppeliaMountainEnv(gym.Env):
             # reward_upward = self._calculate_upward_direction_reward(base_lin_vel)
             # reward_downward_straight = self._calculate_downward_straightness_reward(orientation_euler_rad, current_vz) 
             # reward_landing = self._calculate_landing_reward(orientation_euler_rad, current_height, current_vz, self.previous_base_lin_vel_z)
-            reward_jump_count_event = self._calculate_jump_count_event_reward(current_height)
+            # reward_jump_count_event = self._calculate_jump_count_event_reward(current_height)
             
             # total_reward = (15 * reward_spin + 
             #                 50 * reward_upward + 
             #                 20 * reward_downward_straight + 
             #                 30 * reward_landing)
             # total_reward = self.jump_count_reward_weight * reward_jump_count_event
+            total_reward = (current_height > 0.4)
             
             terminated_by_fall, fall_penalty = self._check_fall_termination_and_penalty(current_height)
             if terminated_by_fall:
