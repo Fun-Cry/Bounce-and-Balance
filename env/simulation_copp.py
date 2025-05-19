@@ -1,4 +1,5 @@
-# env/simulation_copp.py
+# env/simulation_copp.py 
+# (Make sure this is the file with CoppeliaSimZMQInterface)
 import numpy as np
 import random
 import time
@@ -6,8 +7,7 @@ import struct
 import cv2
 from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 
-# Use relative imports as this file is part of the 'env' package
-from . import actuator, actuator_param # Assuming actuator.py/actuator_param.py are in 'env/'
+from . import actuator, actuator_param 
 from .scene_elements import generate_random_mountain
 
 class CoppeliaSimZMQInterface:
@@ -16,234 +16,272 @@ class CoppeliaSimZMQInterface:
         self.dt = dt
         self.q_cal = np.array(q_cal)
         self.exclusion_radius = exclusion_radius
-        self.client = RemoteAPIClient()
-        self.sim = self.client.getObject('sim')
+        self.client = RemoteAPIClient() 
+        self.sim = self.client.getObject('sim') 
 
+        self.SCRIPT_CALL_SUCCESS = 1 
+        if hasattr(self.sim, 'script_call_success'):
+            self.SCRIPT_CALL_SUCCESS = self.sim.script_call_success
+        elif hasattr(self.sim, 'simx_return_ok'): 
+             self.SCRIPT_CALL_SUCCESS = self.sim.simx_return_ok
+
+        self.robot_base = -1 
+        self.initial_base_pos = [0,0,0.3] 
+        self.initial_base_ori = [0,0,0]
         try:
             self.robot_base = self.sim.getObject('/base_link_respondable')
-            self.initial_base_pos = self.sim.getObjectPosition(self.robot_base, -1)
-            self.initial_base_ori = self.sim.getObjectOrientation(self.robot_base, -1)
-        except Exception:
-            self.robot_base = None; self.initial_base_pos = [0,0,0]; self.initial_base_ori = [0,0,0]
-            print('⚠️ Could not get /base_link_respondable. Robot height reward & fall detection might be affected.')
+            if self.robot_base != -1:
+                scene_initial_pos = self.sim.getObjectPosition(self.robot_base, -1)
+                scene_initial_ori = self.sim.getObjectOrientation(self.robot_base, -1)
+                if scene_initial_pos: self.initial_base_pos = scene_initial_pos
+                if scene_initial_ori: self.initial_base_ori = scene_initial_ori
+                print(f"INFO: Robot base '/base_link_respondable' found. Handle: {self.robot_base}. Initial scene pose: P={self.initial_base_pos}, O={self.initial_base_ori}")
+            else:
+                print("WARNING: Robot base '/base_link_respondable' not found. Using default initial pose.")
+        except Exception as e:
+            print(f"WARNING: Error getting /base_link_respondable: {e}. Using default initial pose.")
+        
+        self.vision_sensor_handle = -1
         try:
-            self.vision_sensor_handle = self.sim.getObject('/base_link_respondable/visionSensor')
-        except: self.vision_sensor_handle = None; print('⚠️ Vision sensor /base_link_respondable/visionSensor not found.')
+            self.vision_sensor_handle = self.sim.getObject('/base_link_respondable/visionSensor') # Ensure this path is correct in your scene
+            if self.vision_sensor_handle == -1:
+                 print('WARNING: Vision sensor /base_link_respondable/visionSensor not found.')
+        except Exception as e: print(f'WARNING: Error getting vision sensor: {e}.')
+        
+        self.lidar_handle = -1
+        self.lidar_script_handle = -1 
         try:
             self.lidar_handle = self.sim.getObject('/base_link_respondable/VelodyneVPL16')
-            self.lidar_script = self.sim.getScript(self.sim.scripttype_childscript, self.lidar_handle)
-        except: self.lidar_handle = None; self.lidar_script = None; print('⚠️ LiDAR /base_link_respondable/VelodyneVPL16 or script not found.')
+            if self.lidar_handle != -1:
+                 self.lidar_script_handle = self.sim.getScript(self.sim.scripttype_childscript, self.lidar_handle)
+                 if self.lidar_script_handle == -1:
+                     print('WARNING: LiDAR script for /base_link_respondable/VelodyneVPL16 not found.')
+            # else: # This warning is expected if not using LiDAR
+            #     print('INFO: LiDAR /base_link_respondable/VelodyneVPL16 not found (this is OK if using camera).')
+        except Exception as e: print(f'WARNING: Error getting LiDAR: {e}.') # This warning is expected
 
         self.sim.setArrayParam(self.sim.arrayparam_gravity, [0, 0, -9.81])
-        if hasattr(self.sim, 'setStepping'): self.sim.setStepping(True)
+        self.sim.setStepping(True) 
 
-        if joint_aliases is None:
-            # Assuming these are all the joints we might interact with
-            joint_aliases = ['/Joint_0','/Joint_1','/Joint_2','/Joint_3','/joint_rw0','/joint_rw1','/joint_rwz']
+        self.all_joint_aliases = ['/Joint_0','/Joint_1','/Joint_2','/Joint_3','/joint_rw0','/joint_rw1','/joint_rwz']
+        if joint_aliases:
+             self.all_joint_aliases = list(set(self.all_joint_aliases + joint_aliases))
+
         self.joint_handles = {}
-        for alias in joint_aliases:
-            try: self.joint_handles[alias] = self.sim.getObject(alias)
-            except Exception as e: print(f'Warning: could not get handle for {alias}: {e}')
+        for alias in self.all_joint_aliases:
+            try: 
+                handle = self.sim.getObject(alias)
+                if handle != -1:
+                    self.joint_handles[alias] = handle
+            except Exception as e: 
+                print(f'Warning: Could not get handle for {alias}: {e}')
+        
+        print(f"INFO: Fetched handles for joints: {list(self.joint_handles.keys())}")
 
-        self.sim.startSimulation()
+        current_sim_state = self.sim.getSimulationState()
+        if current_sim_state == self.sim.simulation_stopped:
+            self.sim.startSimulation()
+            print("INFO: Simulation started by CoppeliaSimZMQInterface.")
+        else:
+            print("INFO: Simulation was already running.")
+        
         self.spring_fn = spring.fn_spring
         self.actuator_q0 = actuator.Actuator(dt=self.dt, model=actuator_param.actuator_rmdx10)
-        self.actuator_q2 = actuator.Actuator(dt=self.dt, model=actuator_param.actuator_rmdx10) # Corresponds to Joint_1 for action[1]
-        self.actuator_rw1= actuator.Actuator(dt=self.dt, model=actuator_param.actuator_r100kv90) # Corresponds to /joint_rw0 for action[2]
-        self.actuator_rw2= actuator.Actuator(dt=self.dt, model=actuator_param.actuator_r100kv90) # Corresponds to /joint_rw1 for action[3]
+        self.actuator_q1 = actuator.Actuator(dt=self.dt, model=actuator_param.actuator_rmdx10)
+        self.actuator_rw0= actuator.Actuator(dt=self.dt, model=actuator_param.actuator_r100kv90)
+        self.actuator_rw1= actuator.Actuator(dt=self.dt, model=actuator_param.actuator_r100kv90)
         self.actuator_rwz= actuator.Actuator(dt=self.dt, model=actuator_param.actuator_8318)
+        
         self.scenery_handles = []
 
-        # Define the joints that are actively controlled by the policy's actions
-        # These are the keys in 'joint_torque_mapping' in the control() method
-        self.controlled_joint_aliases = ['/Joint_0', '/Joint_1', '/joint_rw0', '/joint_rw1', '/joint_rwz']
-
+        self.controlled_joint_aliases_ordered = [
+            '/Joint_0', '/Joint_1', '/joint_rw0', '/joint_rw1', '/joint_rwz'
+        ] 
+        self.actuators_ordered = [
+            self.actuator_q0, self.actuator_q1, self.actuator_rw0,
+            self.actuator_rw1, self.actuator_rwz
+        ]
 
     def _get_joint_states(self):
         pos, vel = {}, {}
         for alias, h in self.joint_handles.items():
-            pos[alias] = self.sim.getJointPosition(h)
-            vel[alias] = self.sim.getJointVelocity(h)
+            if h == -1: continue
+            try:
+                pos[alias] = self.sim.getJointPosition(h)
+                vel[alias] = self.sim.getJointVelocity(h)
+            except Exception as e:
+                pos[alias] = 0.0
+                vel[alias] = 0.0
         return pos, vel
 
     def get_base_imu_data(self):
-        """Gets linear and angular velocity of the robot base."""
-        if self.robot_base:
+        if self.robot_base != -1:
             try:
                 linear_vel, angular_vel = self.sim.getObjectVelocity(self.robot_base)
                 return np.array(linear_vel, dtype=np.float32), np.array(angular_vel, dtype=np.float32)
             except Exception as e:
-                # print(f"Warning: Could not get base velocity: {e}")
                 return np.zeros(3, dtype=np.float32), np.zeros(3, dtype=np.float32)
         return np.zeros(3, dtype=np.float32), np.zeros(3, dtype=np.float32)
 
-    def control(self, action_from_rl): # 'action_from_rl' is from the RL agent, range [-1, 1], shape (5,)
-        processed_action = -np.asarray(action_from_rl, dtype=np.float32)
-        pos, vel = self._get_joint_states()
+    def control(self, action_from_controller): 
+        processed_action = -np.asarray(action_from_controller, dtype=np.float32) 
+        current_joint_pos, current_joint_vel = self._get_joint_states()
 
-        if '/Joint_0' not in pos or '/Joint_1' not in pos:
-            return
+        q0_spring_val = current_joint_pos.get('/Joint_0', 0.0) + self.q_cal[0]
+        q1_spring_val = current_joint_pos.get('/Joint_1', 0.0) + self.q_cal[1]
+        ts0, ts1 = self.spring_fn(q0=q0_spring_val, q2=q1_spring_val)
 
-        q0_spring = pos.get('/Joint_0', 0.0) + self.q_cal[0]
-        q1_spring_for_q2_param = pos.get('/Joint_1', 0.0) + self.q_cal[1]
-        ts0, ts1 = self.spring_fn(q0=q0_spring, q2=q1_spring_for_q2_param)
+        final_torques_to_apply = [0.0] * len(self.controlled_joint_aliases_ordered)
 
-        taus_from_actuators = [0.0] * 5
+        for i, alias in enumerate(self.controlled_joint_aliases_ordered):
+            target_current = processed_action[i] * self.actuators_ordered[i].i_max
+            joint_velocity = current_joint_vel.get(alias, 0.0)
+            
+            tau_actuator, _, _ = self.actuators_ordered[i].actuate(i=target_current, q_dot=joint_velocity)
+            final_torques_to_apply[i] = tau_actuator
 
-        target_current_q0 = processed_action[0] * self.actuator_q0.i_max
-        dq0 = vel.get('/Joint_0', 0.0)
-        taus_from_actuators[0], _, _ = self.actuator_q0.actuate(i=target_current_q0, q_dot=dq0)
-
-        target_current_j1 = processed_action[1] * self.actuator_q2.i_max
-        dq1 = vel.get('/Joint_1', 0.0)
-        taus_from_actuators[1], _, _ = self.actuator_q2.actuate(i=target_current_j1, q_dot=dq1)
-
-        target_current_rw0 = processed_action[2] * self.actuator_rw1.i_max
-        dqrw0 = vel.get('/joint_rw0', 0.0)
-        taus_from_actuators[2], _, _ = self.actuator_rw1.actuate(i=target_current_rw0, q_dot=dqrw0)
-
-        target_current_rw1 = processed_action[3] * self.actuator_rw2.i_max
-        dqrw1 = vel.get('/joint_rw1', 0.0)
-        taus_from_actuators[3], _, _ = self.actuator_rw2.actuate(i=target_current_rw1, q_dot=dqrw1)
-
-        target_current_rwz = processed_action[4] * self.actuator_rwz.i_max
-        dqrwz = vel.get('/joint_rwz', 0.0)
-        taus_from_actuators[4], _, _ = self.actuator_rwz.actuate(i=target_current_rwz, q_dot=dqrwz)
-        
-        final_torques_to_apply = list(taus_from_actuators) 
         final_torques_to_apply[0] += ts0 
         final_torques_to_apply[1] += ts1 
 
-        joint_torque_mapping = {
-            self.controlled_joint_aliases[0]: final_torques_to_apply[0], # /Joint_0
-            self.controlled_joint_aliases[1]: final_torques_to_apply[1], # /Joint_1
-            self.controlled_joint_aliases[2]: final_torques_to_apply[2], # /joint_rw0
-            self.controlled_joint_aliases[3]: final_torques_to_apply[3], # /joint_rw1
-            self.controlled_joint_aliases[4]: final_torques_to_apply[4]  # /joint_rwz
-        }
-
-        for alias, torque_value in joint_torque_mapping.items():
+        for i, alias in enumerate(self.controlled_joint_aliases_ordered):
             joint_handle = self.joint_handles.get(alias)
-            if not joint_handle:
+            if not joint_handle or joint_handle == -1:
                 continue
             
-            target_velocity_for_torque_mode = 1000.0 
-            if torque_value == 0.0:
-                self.sim.setJointTargetVelocity(joint_handle, 0.0)
-                self.sim.setJointTargetForce(joint_handle, 0.0) 
-            elif torque_value > 0:
-                self.sim.setJointTargetVelocity(joint_handle, target_velocity_for_torque_mode)
-                self.sim.setJointTargetForce(joint_handle, float(abs(torque_value)))
-            else: # torque_value < 0
-                self.sim.setJointTargetVelocity(joint_handle, -target_velocity_for_torque_mode)
-                self.sim.setJointTargetForce(joint_handle, float(abs(torque_value)))
+            torque_value = final_torques_to_apply[i]
+            target_velocity_for_torque_mode = 10000.0 
+            
+            try:
+                if torque_value == 0.0:
+                    self.sim.setJointTargetVelocity(joint_handle, 0.0)
+                    self.sim.setJointTargetForce(joint_handle, 0.001) 
+                elif torque_value > 0:
+                    self.sim.setJointTargetVelocity(joint_handle, target_velocity_for_torque_mode)
+                    self.sim.setJointTargetForce(joint_handle, float(abs(torque_value)))
+                else: 
+                    self.sim.setJointTargetVelocity(joint_handle, -target_velocity_for_torque_mode)
+                    self.sim.setJointTargetForce(joint_handle, float(abs(torque_value)))
+            except Exception as e:
+                print(f"Error setting joint torque for {alias} (handle {joint_handle}): {e}")
         
         self.sim.step()
 
     def get_sensor_data(self, show=False):
         rgb, lidar = None, None
-        if self.vision_sensor_handle:
+        if self.vision_sensor_handle != -1:
             try:
                 rx,ry=self.sim.getVisionSensorResolution(self.vision_sensor_handle)
-                buf,_,_=self.sim.getVisionSensorCharImage(self.vision_sensor_handle)
-                rgb=np.frombuffer(buf,np.uint8).reshape((ry,rx,3))[::-1]
-                if show and rgb is not None: cv2.imshow('RGB from Sim',rgb); cv2.waitKey(1)
-            except: pass
-        if self.lidar_handle and self.lidar_script:
+                buf,_,_=self.sim.getVisionSensorCharImage(self.vision_sensor_handle) 
+                if buf: rgb=np.frombuffer(buf,np.uint8).reshape((ry,rx,3))[::-1] 
+                if show and rgb is not None: 
+                    cv2.imshow('RGB from Sim', cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+                    cv2.waitKey(1)
+            except Exception as e: 
+                pass 
+        if self.lidar_handle != -1 and self.lidar_script_handle != -1:
             try:
-                _,_,_,buf=self.sim.callScriptFunction('getVelodyneBuffer',self.lidar_script,[],[],[],b'')
-                if buf: lidar=np.array(struct.unpack('f'*(len(buf)//4),buf),np.float32).reshape(-1,3)
+                ret_code, _, _, _, lidar_buffer = self.sim.callScriptFunction(
+                    self.lidar_script_handle,      
+                    'getVelodyneData_points',      
+                    [], [], [], b''                
+                )
+                if ret_code == self.SCRIPT_CALL_SUCCESS and lidar_buffer:
+                     lidar=np.array(struct.unpack('f'*(len(lidar_buffer)//4),lidar_buffer),np.float32).reshape(-1,3)
+                elif ret_code != self.SCRIPT_CALL_SUCCESS:
+                    pass 
                 if show and lidar is not None: print(f'[LiDAR from Sim] {lidar.shape[0]} pts')
-            except: pass
+            except Exception as e:
+                pass
         return rgb, lidar
 
     def clear_scenery(self):
         for h in self.scenery_handles:
-            try: self.sim.removeObject(h)
-            except: pass
+            if h != -1:
+                try: self.sim.removeObject(h) 
+                except: pass
         self.scenery_handles = []
 
-    def spawn_scenery(self, n_items=3, shape_options=8, mountain_target_total_height=1.0,
-                        mountain_max_cylinder_height=0.4, mountain_min_cylinder_height=0.05,
-                        mountain_peak_radius=0.1, mountain_base_radius_factor_range=(4.0, 7.0),
-                        mountain_area_bounds_x=None, mountain_area_bounds_y=None, **kwargs):
+    def spawn_scenery(self, n_items=3, **kwargs_for_mountain_generation): 
         self.clear_scenery()
-        for _ in range(n_items):
-            factor = random.uniform(mountain_base_radius_factor_range[0], mountain_base_radius_factor_range[1])
-            args={'sim':self.sim,'target_total_height':mountain_target_total_height,
-                    'max_cylinder_height':mountain_max_cylinder_height,'min_cylinder_height':mountain_min_cylinder_height,
-                    'peak_radius':mountain_peak_radius,'base_radius_factor':factor,'shape_options':shape_options}
-            if mountain_area_bounds_x: args['area_bounds_x']=mountain_area_bounds_x
-            if mountain_area_bounds_y: args['area_bounds_y']=mountain_area_bounds_y
-            handles = generate_random_mountain(**args)
+        scene_creation_params = {
+            'sim': self.sim, 
+            'target_total_height': kwargs_for_mountain_generation.get('mountain_target_total_height', 1.0),
+            'max_cylinder_height': kwargs_for_mountain_generation.get('mountain_max_cylinder_height', 0.11),
+            'min_cylinder_height': kwargs_for_mountain_generation.get('mountain_min_cylinder_height', 0.05),
+            'peak_radius': kwargs_for_mountain_generation.get('mountain_peak_radius', 0.3),
+            'base_radius_factor': random.uniform(*kwargs_for_mountain_generation.get('mountain_base_radius_factor_range', (3.0, 5.0))),
+            'shape_options': kwargs_for_mountain_generation.get('shape_options', 9), 
+            'area_bounds_x': kwargs_for_mountain_generation.get('mountain_area_bounds_x', (-2.5, 2.5)),
+            'area_bounds_y': kwargs_for_mountain_generation.get('mountain_area_bounds_y', (1.5, 3.5)),
+            'exclusion_radius': self.exclusion_radius, 
+            'robot_pos': self.initial_base_pos[:2]    
+        }
+        for _ in range(n_items): 
+            handles = generate_random_mountain(**scene_creation_params) 
             if handles: self.scenery_handles.extend(handles)
 
-    def reset_environment(self, sequential=False, initial_leg_angles=None, **kwargs):
-        # --- Reset Robot Base ---
-        if self.robot_base:
-            self.sim.setObjectPosition(self.robot_base, -1, self.initial_base_pos)
-            self.sim.setObjectOrientation(self.robot_base, -1, self.initial_base_ori)
-            # # Reset base velocity
-            # self.sim.setObjectFloatParameter(self.robot_base)
-            # self.sim.setObjectVelocity(self.robot_base, [0,0,0], [0,0,0])
+    def reset_environment(self, sequential=False, initial_joint_angles=None, **kwargs):
+        if self.robot_base != -1 :
+            try:
+                self.sim.setObjectPosition(self.robot_base, -1, self.initial_base_pos)
+                self.sim.setObjectOrientation(self.robot_base, -1, self.initial_base_ori)
+            except Exception as e:
+                print(f"Warning: Could not reset robot base pose: {e}")
 
-
-        # --- Reset Joint States (Legs and other controlled joints) ---
-        if initial_leg_angles is None:
-            # Default initial angles for leg joints (/Joint_0, /Joint_1)
-            # You can customize these values
-            initial_leg_angles = {'/Joint_0': 0.0, '/Joint_1': 0.0} 
-        
-        for alias in self.controlled_joint_aliases:
-            joint_handle = self.joint_handles.get(alias)
-            if joint_handle:
-                # Set specific initial positions for leg joints
-                if alias in initial_leg_angles:
-                    self.sim.setJointPosition(joint_handle, initial_leg_angles[alias])
-                # For other controlled joints (e.g., reaction wheels), 
-                # you might also want to set them to 0 or a specific initial position.
-                # Here, we'll just ensure their forces/velocities are reset if not in initial_leg_angles.
-                # If they are reaction wheels, setting position to 0 and velocity to 0 is a full reset.
-                elif 'rw' in alias: # Example: reset reaction wheel positions to 0
-                     self.sim.setJointPosition(joint_handle, 0.0)
-
-
-                # Reset forces and target velocities for all controlled joints
-                # This stops any previous motion or force application.
-                self.sim.setJointTargetVelocity(joint_handle, 0.0)
-                self.sim.setJointTargetForce(joint_handle, 0.0) # Set applied force/torque to 0
+        for alias, joint_handle in self.joint_handles.items():
+            if joint_handle == -1: continue
+            try:
+                angle_to_set = 0.0
+                if initial_joint_angles and alias in initial_joint_angles:
+                     angle_to_set = initial_joint_angles[alias]
                 
-                # For some physics engines or joint modes, you might need to set motor enabled and control loop enabled
-                # self.sim.setObjectInt32Param(joint_handle, self.sim.jointintparam_motor_enabled, 1)
-                # self.sim.setObjectInt32Param(joint_handle, self.sim.jointintparam_ctrl_enabled, 1)
+                self.sim.setJointPosition(joint_handle, angle_to_set)
+                self.sim.setJointTargetVelocity(joint_handle, 0.0) 
+                self.sim.setJointTargetForce(joint_handle, 0.001) 
+            except Exception as e:
+                print(f"Warning: Could not reset joint {alias} (handle {joint_handle}): {e}")
 
+        if initial_joint_angles: 
+            for alias, angle_val in initial_joint_angles.items():
+                joint_handle = self.joint_handles.get(alias)
+                if joint_handle and joint_handle != -1:
+                    try:
+                        self.sim.setJointPosition(joint_handle, angle_val)
+                        self.sim.setJointTargetVelocity(joint_handle, 0.0)
+                        self.sim.setJointTargetForce(joint_handle, 0.001)
+                    except Exception as e:
+                        print(f"Warning: Could not set initial angle for joint {alias} (handle {joint_handle}): {e}")
 
-        # It can be beneficial to step the simulation once to allow these changes to propagate
-        # before the learning agent's control loop takes over.
-        # However, the main control() method already calls self.sim.step() at the end.
-        # If immediate propagation is needed before control() is called post-reset:
-        # self.sim.step() 
-        # Note: If you call step() here, ensure it doesn't interfere with your RL loop's timing
-        # or the first observation gathering. Often, the next call to control() is sufficient.
+        for act in self.actuators_ordered:
+            act.i_smoothed = 0.0
 
-        # --- Reset Scenery ---
-        if not sequential: 
-            self.spawn_scenery(**kwargs)
+        if not sequential:
+            # MODIFIED: Pop 'n_items' from kwargs before passing to spawn_scenery
+            # Determine n_items_for_scenery explicitly.
+            # The default for 'n_items' in kwargs coming from mountain_env is usually 0 for this setup.
+            # Let's respect what mountain_env wants for n_items primarily.
+            n_items_from_kwargs = kwargs.pop('n_items', None) # Try to get n_items from kwargs and remove it
 
-    def close(self):
-        try: 
+            if n_items_from_kwargs is not None:
+                n_items_for_scenery = n_items_from_kwargs
+            else: # Fallback if not in kwargs (shouldn't happen if mountain_env sends scene_params)
+                n_items_for_scenery = 0 if self.initial_base_pos[2] < 0.1 else 3
+            
+            # Now kwargs will not contain 'n_items', avoiding the TypeError
+            self.spawn_scenery(n_items=n_items_for_scenery, **kwargs)
+        else:
             self.clear_scenery()
-            # It's good practice to stop simulation before client disconnects if it was started by this script
-            current_sim_state = self.sim.getSimulationState()
-            if current_sim_state != self.sim.simulation_stopped:
-                self.sim.stopSimulation()
-        except Exception as e: 
-            print(f"Exception during stopSimulation: {e}")
+            
+    def close(self):
+        try:
+            self.clear_scenery()
+            if self.sim: 
+                current_sim_state = self.sim.getSimulationState() 
+                if current_sim_state != self.sim.simulation_stopped: 
+                    self.sim.stopSimulation() 
+                    print("CoppeliaSim simulation stopped by ZMQ interface.")
+        except Exception as e:
+            print(f"Exception during CoppeliaSim ZMQ interface close: {e}")
         finally:
-            # The RemoteAPIClient doesn't have a 'disconnect' or 'close' method explicitly.
-            # It relies on Python's garbage collection to close the ZMQ socket.
-            # Forcing it might look like:
-            # if hasattr(self.client, 'close') and callable(self.client.close):
-            #    self.client.close() # Hypothetical close, actual client might differ
             cv2.destroyAllWindows()
-            print('CoppeliaSimZMQInterface resources released.')
+            print('CoppeliaSimZMQInterface resources released (client will close on exit).')
