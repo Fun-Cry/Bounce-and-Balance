@@ -133,32 +133,48 @@ class CoppeliaSimZMQInterface:
 
         final_torques_to_apply = [0.0] * len(self.controlled_joint_aliases_ordered)
 
+        # !!!!! EMERGENCY CHANGE: SCALE DOWN REACTION WHEEL ACTIONS !!!!!
+        reaction_wheel_action_scale = 0.05 # Try 5% of original authority. You can tune this (e.g., 0.01 to 0.1)
+
         for i, alias in enumerate(self.controlled_joint_aliases_ordered):
-            target_current = processed_action[i] * self.actuators_ordered[i].i_max
+            # Get the original action value for this joint from the policy
+            current_action_value_from_policy = processed_action[i]
+            
+            # If this is a reaction wheel joint, drastically scale down its commanded action value
+            if alias in ['/joint_rw0', '/joint_rw1', '/joint_rwz']:
+                # Uncomment for debugging if needed:
+                # print(f"Original RW action for {alias}: {current_action_value_from_policy:.4f}, Scaled: {current_action_value_from_policy * reaction_wheel_action_scale:.4f}")
+                current_action_value_from_policy *= reaction_wheel_action_scale
+            
+            # Calculate target current using the (potentially scaled) action value
+            target_current = current_action_value_from_policy * self.actuators_ordered[i].i_max
             joint_velocity = current_joint_vel.get(alias, 0.0)
             
             tau_actuator, _, _ = self.actuators_ordered[i].actuate(i=target_current, q_dot=joint_velocity)
             final_torques_to_apply[i] = tau_actuator
 
+        # Add spring torques (if any) to the appropriate leg joints
         final_torques_to_apply[0] += ts0 
         final_torques_to_apply[1] += ts1 
 
+        # Apply the final torques to the joints in the simulation
         for i, alias in enumerate(self.controlled_joint_aliases_ordered):
             joint_handle = self.joint_handles.get(alias)
             if not joint_handle or joint_handle == -1:
                 continue
             
             torque_value = final_torques_to_apply[i]
-            target_velocity_for_torque_mode = 10000.0 
+            target_velocity_for_torque_mode = 10000.0 # High target velocity for torque control mode
             
             try:
                 if torque_value == 0.0:
                     self.sim.setJointTargetVelocity(joint_handle, 0.0)
+                    # Set a very small force to allow the joint to be "loose" if no torque is commanded
                     self.sim.setJointTargetForce(joint_handle, 0.001) 
                 elif torque_value > 0:
                     self.sim.setJointTargetVelocity(joint_handle, target_velocity_for_torque_mode)
                     self.sim.setJointTargetForce(joint_handle, float(abs(torque_value)))
-                else: 
+                else: # torque_value < 0
                     self.sim.setJointTargetVelocity(joint_handle, -target_velocity_for_torque_mode)
                     self.sim.setJointTargetForce(joint_handle, float(abs(torque_value)))
             except Exception as e:

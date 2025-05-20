@@ -114,60 +114,94 @@ def run_random_agent_test(env, num_episodes=3, steps_per_episode=200):
         print(f"--- Test Episode {episode_idx} finished. Total Reward: {total_episode_reward:.3f} ---\n")
     # env.close() # Closing is handled in the main try/finally block
 
-def train_with_stable_baselines3(env, total_timesteps=10000, save_path="./sb3_rex_model"):
+def train_with_stable_baselines3(env, total_timesteps_target=1500000, save_path_prefix="./sb3_rex_model"):
     """
     Trains an agent using Stable Baselines3.
+    total_timesteps_target: The overall target number of timesteps for the entire training run.
+    save_path_prefix: Prefix for saving models and checkpoints (e.g., "./sb3_rex_model").
+                      The mode (e.g., 'joints_only') will be appended to this.
     """
     print(f"\n--- Starting Stable Baselines3 Training with PPO (Mode: {env.mode})") 
     
-    # For 'joints_only' mode, if you want to be certain the image network part isn't trained,
-    # you might consider freezing its weights. This is more advanced and depends on your
-    # policy's feature extractor structure.
-    # Example (conceptual, needs correct layer names for your MultiInputPolicy):
-    # if env.mode == 'joints_only' and hasattr(model.policy, 'features_extractor'):
-    #     if 'image' in model.policy.features_extractor.extractors: # For CombinedExtractor
-    #         print("Attempting to freeze image feature extractor weights...")
-    #         for param in model.policy.features_extractor.extractors['image'].parameters():
-    #             param.requires_grad = False
-    #         print("Image feature extractor weights frozen.")
-    #     else:
-    #         print("Could not find 'image' extractor in model.policy.features_extractor.extractors to freeze.")
+    current_mode_suffix = env.mode # e.g., 'joints_only' or 'normal'
+    model_save_path = f"{save_path_prefix}_{current_mode_suffix}" # e.g., "./sb3_rex_model_joints_only"
+    checkpoint_folder = f"{model_save_path}_checkpoints" # e.g., "./sb3_rex_model_joints_only_checkpoints"
 
+    new_learning_rate = 3e-4 # Increased learning rate
+    
+    # ***** USER: CHOOSE YOUR VALID CHECKPOINT STEP NUMBER HERE *****
+    checkpoint_step_to_load = 1100000 # You chose 500000. Ensure this file is VALID (not 0 bytes).
+                                     # If ppo_rex_500000_steps.zip is 0 bytes, pick another one, e.g., 400000
+    # checkpoint_step_to_load = 400000 # Example if 500k is bad.
 
-    model = PPO("MultiInputPolicy", env, verbose=1, learning_rate=1e-5)
-    
-    # Example of loading a pre-existing model:
-    # model_load_path = save_path + ".zip"
-    # if os.path.exists(model_load_path):
-    #     print(f"Loading pre-existing model from {model_load_path}")
-    #     model = PPO.load(model_load_path, env=env) # Make sure to pass the env or call set_env later
-    # else:
-    #     print("No pre-existing model found, creating a new one.")
-    
-    # model.load("sb3_rex_model_joints_only.zip")
-    model.load("ppo_rex_160000_steps.zip")
+    # Path to the specific checkpoint file
+    checkpoint_filename = f"ppo_rex_{checkpoint_step_to_load}_steps.zip"
+    checkpoint_to_load_full_path = os.path.join(checkpoint_folder, checkpoint_filename)
+
+    print(f"Attempting to load checkpoint from: {checkpoint_to_load_full_path}")
+
+    loaded_model_num_timesteps = 0
+    model_loaded_successfully = False # Flag to track if loading was successful
+
+    if os.path.exists(checkpoint_to_load_full_path):
+        # Crucially, check if the file is not empty
+        if os.path.getsize(checkpoint_to_load_full_path) > 0:
+            print(f"Loading pre-existing model from {checkpoint_to_load_full_path}")
+            try:
+                # *** THIS IS THE CORRECTED LINE ***
+                model = PPO.load(checkpoint_to_load_full_path, env=env) 
+                model_loaded_successfully = True # Mark as successfully loaded
+                print(f"Model loaded. Current num_timesteps: {model.num_timesteps}")
+                loaded_model_num_timesteps = model.num_timesteps
+
+                print(f"Updating learning rate to {new_learning_rate}")
+                if hasattr(model, 'policy') and model.policy and hasattr(model.policy, 'optimizer') and model.policy.optimizer:
+                    for param_group in model.policy.optimizer.param_groups:
+                        param_group['lr'] = new_learning_rate
+                    print(f"Optimizer learning rate updated to {new_learning_rate}.")
+                else:
+                    print("Warning: Could not directly set optimizer learning rate. Ensure model.learning_rate is used if applicable.")
+                    model.learning_rate = new_learning_rate
+            except Exception as e:
+                print(f"Error loading model from {checkpoint_to_load_full_path}: {e}")
+                print("Will proceed by creating a new model.")
+                model_loaded_successfully = False # Ensure flag is false on error
+        else:
+            print(f"Checkpoint file {checkpoint_to_load_full_path} is 0 bytes and cannot be loaded.")
+            model_loaded_successfully = False
+    else:
+        print(f"Checkpoint {checkpoint_to_load_full_path} not found.")
+        model_loaded_successfully = False # Ensure flag is false if file doesn't exist
+
+    if not model_loaded_successfully: # If model wasn't loaded for any reason (not found, 0 bytes, load error)
+        print(f"Creating a new model with learning_rate={new_learning_rate}.")
+        model = PPO("MultiInputPolicy", env, verbose=1, learning_rate=new_learning_rate)
+        loaded_model_num_timesteps = 0 # Reset this as we are starting fresh
+
+    if not os.path.exists(checkpoint_folder):
+        os.makedirs(checkpoint_folder, exist_ok=True)
+        
     checkpoint_callback = CheckpointCallback(
-        save_freq=10_000,  # Save every 10k steps
-        save_path=f"{save_path}_checkpoints",  # Folder to store checkpoints
+        save_freq=10_000, # Save every 10k steps
+        save_path=checkpoint_folder,
         name_prefix="ppo_rex"
     )
-        
-    model.learn(total_timesteps=total_timesteps, callback=checkpoint_callback, progress_bar=True)
-    model.save(save_path)
-    print(f"Training complete. Model saved to {save_path}.zip")
+    
+    timesteps_to_train_further = total_timesteps_target - loaded_model_num_timesteps
+    
+    if timesteps_to_train_further <= 0:
+        print(f"Loaded model has {loaded_model_num_timesteps} timesteps, which is >= target {total_timesteps_target}.")
+        print("Training for an additional 10,000 steps.")
+        timesteps_to_train_further = 10_000 
+    
+    print(f"Target total timesteps: {total_timesteps_target}")
+    print(f"Model current timesteps (after potential load): {loaded_model_num_timesteps}")
+    print(f"Training for an additional {timesteps_to_train_further} timesteps.")
 
-    # Test the trained agent (optional)
-    print("\n--- Testing Trained Agent ---")
-    obs, info = env.reset()
-    for _ in range(DEFAULT_ENV_MAX_STEPS * 2): # Test for a couple of episodes
-        action, _states = model.predict(obs, deterministic=True)
-        obs, reward, terminated, truncated, info = env.step(action)
-        # env.render() # If you want to see it play (ensure render_mode='human' and not headless)
-        if terminated or truncated:
-            print(f"Trained agent episode finished. Resetting. Final reward for episode: {reward}")
-            obs, info = env.reset()
-            # break # Uncomment if you only want to test one episode
-    print("--- Trained Agent Test Finished ---")
+    model.learn(total_timesteps=timesteps_to_train_further, callback=checkpoint_callback, progress_bar=True, reset_num_timesteps=False)
+    
+    model.save(model_save_path)
+    print(f"Training complete. Model saved to {model_save_path}.zip")
 
 if __name__ == '__main__':
     # --- CHOOSE YOUR MODE AND SETUP ---
@@ -214,5 +248,7 @@ if __name__ == '__main__':
         # You can choose to run a random agent test or train
         # run_random_agent_test(env_instance, num_episodes=2, steps_per_episode=100)
         
-        train_with_stable_baselines3(env_instance, total_timesteps=10 ** 6, save_path=f"./sb3_rex_model_{CURRENT_MODE}")
-
+        # Pass the overall target timesteps and the base path for saving
+        train_with_stable_baselines3(env_instance, 
+                                     total_timesteps_target=1_500_000, 
+                                     save_path_prefix=f"./sb3_rex_model") # Mode will be appended by the function
