@@ -1,13 +1,13 @@
-# env_runner.py
 import gymnasium as gym
 import time
 import os
+import numpy as np # Added for reward logging
+import matplotlib.pyplot as plt # Added for plotting
 from env.mountain_env import CoppeliaMountainEnv
 # from utils.coppelia_launcher import start_coppeliasim, stop_coppeliasim # Use the launcher
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
-from stable_baselines3.common.callbacks import CheckpointCallback
-
+from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback # Added BaseCallback
 
 # --- Default Configurations ---
 DEFAULT_SCENE_CAMERA = "rex_camera.ttt"
@@ -20,6 +20,29 @@ DEFAULT_MOUNTAIN_PARAMS_FOR_ENV = { # These are passed to CoppeliaMountainEnv's 
     'mountain_base_radius_factor_range': (2.5, 4.5),
     # Other params will use CoppeliaMountainEnv's internal defaults if not specified
 }
+
+class RewardLoggerCallback(BaseCallback):
+    """
+    A custom callback that logs rewards and timesteps.
+    """
+    def __init__(self, check_freq: int, verbose: int = 1):
+        super(RewardLoggerCallback, self).__init__(verbose)
+        self.check_freq = check_freq
+        self.rewards = []
+        self.timesteps = []
+        self.current_episode_rewards = []
+
+    def _on_step(self) -> bool:
+        # Log reward at each step for the current episode
+        # Assuming the info dict contains episode reward when done
+        if 'episode' in self.locals['infos'][0]:
+            episode_info = self.locals['infos'][0]['episode']
+            if 'r' in episode_info: # 'r' is the cumulative reward for the episode
+                self.rewards.append(episode_info['r'])
+                self.timesteps.append(self.num_timesteps)
+                if self.verbose > 0:
+                    print(f"Logged episode reward: {episode_info['r']} at timestep {self.num_timesteps}")
+        return True
 
 def print_manual_intervention_instructions(scene_file_name):
     print("\n" + "="*60)
@@ -109,7 +132,7 @@ def run_random_agent_test(env, num_episodes=3, steps_per_episode=200):
             obs, reward, terminated, truncated, info = env.step(action)
             total_episode_reward += reward
             if step_idx % 50 == 0 or terminated or truncated:
-                print(f"  Ep {episode_idx}, Step {env.current_step_count}: Reward={reward:.3f}, Term={terminated}, Trunc={truncated}")
+                print(f"   Ep {episode_idx}, Step {env.current_step_count}: Reward={reward:.3f}, Term={terminated}, Trunc={truncated}")
             if terminated or truncated: break
         print(f"--- Test Episode {episode_idx} finished. Total Reward: {total_episode_reward:.3f} ---\n")
     # env.close() # Closing is handled in the main try/finally block
@@ -119,19 +142,20 @@ def train_with_stable_baselines3(env, total_timesteps_target=1500000, save_path_
     Trains an agent using Stable Baselines3.
     total_timesteps_target: The overall target number of timesteps for the entire training run.
     save_path_prefix: Prefix for saving models and checkpoints (e.g., "./sb3_rex_model").
-                      The mode (e.g., 'joints_only') will be appended to this.
+                          The mode (e.g., 'joints_only') will be appended to this.
     """
     print(f"\n--- Starting Stable Baselines3 Training with PPO (Mode: {env.mode})") 
     
     current_mode_suffix = env.mode # e.g., 'joints_only' or 'normal'
     model_save_path = f"{save_path_prefix}_{current_mode_suffix}" # e.g., "./sb3_rex_model_joints_only"
     checkpoint_folder = f"{model_save_path}_checkpoints" # e.g., "./sb3_rex_model_joints_only_checkpoints"
+    plot_save_path = f"{model_save_path}_rewards_plot.png" # Path for saving the plot
 
     new_learning_rate = 3e-4 # Increased learning rate
     
     # ***** USER: CHOOSE YOUR VALID CHECKPOINT STEP NUMBER HERE *****
     checkpoint_step_to_load = 1100000 # You chose 500000. Ensure this file is VALID (not 0 bytes).
-                                     # If ppo_rex_500000_steps.zip is 0 bytes, pick another one, e.g., 400000
+                                        # If ppo_rex_500000_steps.zip is 0 bytes, pick another one, e.g., 400000
     # checkpoint_step_to_load = 400000 # Example if 500k is bad.
 
     # Path to the specific checkpoint file
@@ -187,6 +211,15 @@ def train_with_stable_baselines3(env, total_timesteps_target=1500000, save_path_
         name_prefix="ppo_rex"
     )
     
+    # Custom callback for logging rewards
+    # The check_freq in RewardLoggerCallback isn't strictly necessary if we log on episode end,
+    # but we keep it for potential future use or more granular logging.
+    # SB3 logs 'ep_rew_mean' by default when Monitor wrapper is used or if info['episode'] is present.
+    # We will rely on the info['episode'] being populated by the environment or a Monitor wrapper.
+    # If your env doesn't provide this, wrap it: `env = Monitor(env)`
+    # For simplicity, we'll use the new SB3 v2.0+ way of accessing episodic info if available.
+    reward_logger_callback = RewardLoggerCallback(check_freq=1) # check_freq is per step here.
+
     timesteps_to_train_further = total_timesteps_target - loaded_model_num_timesteps
     
     if timesteps_to_train_further <= 0:
@@ -198,10 +231,29 @@ def train_with_stable_baselines3(env, total_timesteps_target=1500000, save_path_
     print(f"Model current timesteps (after potential load): {loaded_model_num_timesteps}")
     print(f"Training for an additional {timesteps_to_train_further} timesteps.")
 
-    model.learn(total_timesteps=timesteps_to_train_further, callback=checkpoint_callback, progress_bar=True, reset_num_timesteps=False)
+    # Pass both callbacks to the learn method
+    model.learn(total_timesteps=timesteps_to_train_further, 
+                callback=[checkpoint_callback, reward_logger_callback], 
+                progress_bar=True, 
+                reset_num_timesteps=False) # reset_num_timesteps=False is important for continued training
     
     model.save(model_save_path)
     print(f"Training complete. Model saved to {model_save_path}.zip")
+
+    # Plotting and saving rewards
+    if reward_logger_callback.rewards:
+        plt.figure(figsize=(10, 5))
+        plt.plot(reward_logger_callback.timesteps, reward_logger_callback.rewards)
+        plt.xlabel("Timesteps")
+        plt.ylabel("Episode Reward")
+        plt.title(f"Episode Reward vs. Timesteps ({current_mode_suffix} mode)")
+        plt.grid(True)
+        plt.savefig(plot_save_path)
+        print(f"Reward plot saved to {plot_save_path}")
+        # plt.show() # Uncomment to display the plot
+    else:
+        print("No reward data logged, skipping plot generation.")
+
 
 if __name__ == '__main__':
     # --- CHOOSE YOUR MODE AND SETUP ---
