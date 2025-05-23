@@ -136,7 +136,7 @@ def test_trained_model(env, model_path, num_episodes=100, deterministic=True):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Test a trained Stable Baselines3 PPO agent for CoppeliaMountainEnv.")
     parser.add_argument("--checkpoint_path", type=str, required=True, help="Path to the SB3 model checkpoint (.zip file).")
-    parser.add_argument("--num_episodes", type=int, default=50, help="Number of episodes to test the agent.")
+    parser.add_argument("--num_episodes", type=int, default=100, help="Number of episodes to test the agent.")
     parser.add_argument("--mode", type=str, default="joints_only", choices=["normal", "joints_only"], help="Environment mode ('normal' or 'joints_only').")
     parser.add_argument("--use_camera", action=argparse.BooleanOptionalAction, default=True, help="Use camera sensor setup (default). Use --no-use_camera for lidar.")
     parser.add_argument("--render", action="store_true", help="Enable human rendering of the environment.")

@@ -133,7 +133,7 @@ class CoppeliaMountainEnv(gym.Env):
         
         self.max_episode_steps = max_episode_steps
         self.current_step_count = 0
-        self.fall_height_threshold = 0.15
+        self.fall_height_threshold = 0.2
         self.fall_angle_threshold_rad = np.deg2rad(60) 
 
         self.previous_base_lin_vel_z = 0.0
