@@ -55,10 +55,8 @@ The robot model, assets, and initial concept adapted for this project are based 
   * `train.py`: Potentially an alternative script for running specific
     environment sessions or tests.
   * `hpo.py`: Script for Hyperparameter Optimization of the RL models.
+  * `demo.py`: Script for loading and testing specific trained model checkpoints.
   * `requirements.txt`: Lists the Python dependencies for the project.
-  * Various `.zip` files (e.g., `sb3_rex_model*.zip`,
-    `jumps_sometimes.zip`, `actuator.zip`): These are various saved model
-    checkpoints from different stages of training and experimentation.
 * **`/assets`**: Contains 3D model assets for the robot.
   * `hopper_rev08/meshes/*.STL`: Mesh files for the robot parts.
   * `hopper_rev08/urdf/*.urdf, *.csv`: URDF (Unified Robot Description
@@ -89,6 +87,8 @@ The robot model, assets, and initial concept adapted for this project are based 
 * **`/utils`**: Root-level utility scripts.
   * `coppelia_launcher.py`: Script to help automate the launching and
     closing of CoppeliaSim instances.
+* **`/checkpoints`**: Root-level utility scripts.
+  * Trained checkpoints.
 
 ## Prerequisites
 
@@ -111,3 +111,65 @@ The robot model, assets, and initial concept adapted for this project are based 
 2. **Install Python dependencies:**
    ```bash
    pip install -r requirements.txt
+    ```
+
+### 3. Hyperparameter Optimization
+
+* Run the `hpo.py` script to perform hyperparameter searches (details of
+  its usage would be within that script or require further
+  documentation).
+
+### 4. Modifying Environment & Rewards
+
+* The core logic for agent-environment interaction, including the
+  **reward shaping**, is in `env/mountain_env.py` (`CoppeliaMountainEnv`
+  class).
+* Low-level simulation control and action processing (like reaction
+  wheel scaling) is in `env/simulation_copp.py`.
+* Actuator characteristics are in `env/actuator.py` and
+  `env/actuator_param.py`.
+
+### 5. Testing
+
+* Use scripts in the `/test` directory (e.g., `debug_sim.py`,
+  `joint_test.py`) for specific tests.
+* The `env_runner.py` also has a section for testing the trained agent
+  after the learning phase. Set `render_mode="human"` for visualization.
+
+## Key Files
+
+* `env_runner.py`: Main training and execution script.
+* `env/mountain_env.py`: Gym environment definition (CRITICAL for RL
+  behavior).
+* `env/simulation_copp.py`: CoppeliaSim communication and control logic.
+* `scenes/rex_camera.ttt`: Primary CoppeliaSim scene for camera-based or
+  `joints_only` modes.
+* `requirements.txt`: Python dependencies.
+* `hpo.py`: For hyperparameter optimization.
+
+## Notes
+
+* The project has seen significant iteration on reward functions to
+  achieve stable jumping.
+* The `joints_only` mode, combined with specific reaction wheel action
+  scaling in `simulation_copp.py`, has shown the most promise for stable
+  learning.
+* Always ensure CoppeliaSim is running and correctly configured before
+  launching Python training scripts.
+
+## Running Demos
+
+To visualize the performance of different trained models, use the `demo.py` script with the appropriate checkpoint and arguments.
+
+* **Raw Input Model:** This demo runs the model trained with raw sensor inputs.
+    ```bash
+    python demo.py --checkpoint_path checkpoints/raw_input.zip --raw
+    ```
+* **Actuator Control Model:** This demo runs the model focused on actuator control.
+    ```bash
+    python demo.py --checkpoint_path checkpoints/actuator.zip
+    ```
+* **Refined Reward Model:** This demo runs the model trained with the newer, refined reward function in normal mode.
+    ```bash
+    python demo.py --checkpoint_path checkpoints/new_reward.zip --mode normal
+    ```
