@@ -1,4 +1,4 @@
-# Reinforcement Learning for Jumping
+# Bounce & Balance
 
 __Maryia Zhyrko s4093771 and Po-Kai Chen s4283341__
 
