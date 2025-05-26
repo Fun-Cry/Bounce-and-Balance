@@ -137,7 +137,7 @@ def run_random_agent_test(env, num_episodes=3, steps_per_episode=200):
         print(f"--- Test Episode {episode_idx} finished. Total Reward: {total_episode_reward:.3f} ---\n")
     # env.close() # Closing is handled in the main try/finally block
 
-def train_with_stable_baselines3(env, total_timesteps_target=1500000, save_path_prefix="./sb3_rex_model"):
+def train_with_stable_baselines3(env, total_timesteps_target=6000000, save_path_prefix="./sb3_rex_model"):
     """
     Trains an agent using Stable Baselines3.
     total_timesteps_target: The overall target number of timesteps for the entire training run.
@@ -206,7 +206,7 @@ def train_with_stable_baselines3(env, total_timesteps_target=1500000, save_path_
         os.makedirs(checkpoint_folder, exist_ok=True)
         
     checkpoint_callback = CheckpointCallback(
-        save_freq=10_000, # Save every 10k steps
+        save_freq=200_000, # Save every 10k steps
         save_path=checkpoint_folder,
         name_prefix="ppo_rex"
     )
@@ -218,7 +218,7 @@ def train_with_stable_baselines3(env, total_timesteps_target=1500000, save_path_
     # We will rely on the info['episode'] being populated by the environment or a Monitor wrapper.
     # If your env doesn't provide this, wrap it: `env = Monitor(env)`
     # For simplicity, we'll use the new SB3 v2.0+ way of accessing episodic info if available.
-    reward_logger_callback = RewardLoggerCallback(check_freq=1) # check_freq is per step here.
+    reward_logger_callback = RewardLoggerCallback(check_freq=100) # check_freq is per step here.
 
     timesteps_to_train_further = total_timesteps_target - loaded_model_num_timesteps
     
@@ -302,5 +302,5 @@ if __name__ == '__main__':
         
         # Pass the overall target timesteps and the base path for saving
         train_with_stable_baselines3(env_instance, 
-                                     total_timesteps_target=1_500_000, 
+                                     total_timesteps_target=6_000_000, 
                                      save_path_prefix=f"./sb3_rex_model") # Mode will be appended by the function
