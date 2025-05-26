@@ -13,6 +13,8 @@ COPPELIASIM_INSTALL_PATH = "C:\\Program Files\\CoppeliaRobotics\\CoppeliaSimEdu"
 # COPPELIASIM_INSTALL_PATH = "/opt/CoppeliaSim_Edu" # LINUX
 # COPPELIASIM_INSTALL_PATH = "/Applications/CoppeliaSim.app" # MACOS
 
+'''"C:\Program Files\CoppeliaRobotics\CoppeliaSimEdu\coppeliaSim.exe" -h C:\Users\user\Dropbox\PC\Desktop\uni\Leiden\24S2\robotics\final\robotics_final\scenes\rex_camera.ttt'''
+
 def _determine_paths(coppeliasim_root_path, scene_file_name):
     system = platform.system()
     executable_path = None

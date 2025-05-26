@@ -1,3 +1,4 @@
 python demo.py --checkpoint_path raw_input.zip --raw
 python demo.py --checkpoint_path actuator.zip
+python demo.py --checkpoint_path new_reward.zip --mode normal
 python demo.py --checkpoint_path newestest.zip --mode normal
