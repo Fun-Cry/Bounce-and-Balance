@@ -18,6 +18,31 @@ robot's actuators. The project includes functionalities for different
 training modes (e.g., `joints_only`), hyperparameter optimization, and
 detailed asset management for the robot model.
 
+
+## Demo Results
+
+<div align="center">
+  <table>
+    <tr>
+      <td align="center">
+        <img src="demo/raw_input.gif" width="300" alt="Raw Input"/>
+        <br>
+        <b>Raw Input</b>
+      </td>
+      <td align="center">
+        <img src="demo/actuator.gif" width="300" alt="Actuator Control"/>
+        <br>
+        <b>Actuator</b>
+      </td>
+      <td align="center">
+        <img src="demo/newest.gif" width="300" alt="Latest Results"/>
+        <br>
+        <b>Refined Reward</b>
+      </td>
+    </tr>
+  </table>
+</div>
+
 ## Folder Structure
 
 * **`/` (Root Directory)**
