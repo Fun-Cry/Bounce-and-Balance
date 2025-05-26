@@ -87,8 +87,7 @@ The robot model, assets, and initial concept adapted for this project are based 
 * **`/utils`**: Root-level utility scripts.
   * `coppelia_launcher.py`: Script to help automate the launching and
     closing of CoppeliaSim instances.
-* **`/checkpoints`**: Root-level utility scripts.
-  * Trained checkpoints.
+* **`/checkpoints`**: Trained checkpoints.
 
 ## Prerequisites
 
